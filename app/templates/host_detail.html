@@ -1,0 +1,39 @@
+{% extends 'base.html' %}
+{% block title %}Host {{ host.name }}{% endblock %}
+{% block content %}
+<section class="card">
+  <h2>{{ host.name }}</h2>
+  <p><strong>Endpoint:</strong> {{ host.username }}@{{ host.address }}:{{ host.port }}</p>
+  <p><strong>Group:</strong> {{ host.group_name }} | <strong>Strict host key:</strong> {{ 'enabled' if host.strict_host_key else 'disabled' }}</p>
+  <form method="post">
+    {{ form.hidden_tag() }}
+    <label>{{ form.command.label }} {{ form.command(rows=4, placeholder='uname -a') }}</label>
+    {{ form.submit(class_='btn') }}
+  </form>
+</section>
+
+<section class="card">
+  <h3>Execution history</h3>
+  {% for run in executions %}
+  <article class="execution">
+    <header>
+      <code>{{ run.command }}</code>
+      <span class="pill {{ run.status }}">{{ run.status }}</span>
+      <small>{{ run.started_at.strftime('%Y-%m-%d %H:%M:%S') }}</small>
+    </header>
+    <div class="output-grid">
+      <div>
+        <h4>stdout</h4>
+        <pre>{{ run.stdout }}</pre>
+      </div>
+      <div>
+        <h4>stderr</h4>
+        <pre>{{ run.stderr }}</pre>
+      </div>
+    </div>
+  </article>
+  {% else %}
+  <p>No commands executed on this host yet.</p>
+  {% endfor %}
+</section>
+{% endblock %}

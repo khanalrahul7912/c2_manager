@@ -1,0 +1,19 @@
+{% extends 'base.html' %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<section class="card narrow">
+  <h2>{{ title }}</h2>
+  <form method="post">
+    {{ form.hidden_tag() }}
+    <label>{{ form.name.label }} {{ form.name() }}</label>
+    <label>{{ form.address.label }} {{ form.address() }}</label>
+    <label>{{ form.group_name.label }} {{ form.group_name(placeholder='linux-prod') }}</label>
+    <label>{{ form.port.label }} {{ form.port() }}</label>
+    <label>{{ form.username.label }} {{ form.username() }}</label>
+    <label>{{ form.key_path.label }} {{ form.key_path(placeholder='~/.ssh/id_ed25519') }}</label>
+    <label class="checkbox">{{ form.strict_host_key() }} {{ form.strict_host_key.label.text }}</label>
+    <label class="checkbox">{{ form.is_active() }} {{ form.is_active.label.text }}</label>
+    {{ form.submit(class_='btn') }}
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,13 @@
+{% extends 'base.html' %}
+{% block title %}Bulk host import{% endblock %}
+{% block content %}
+<section class="card">
+  <h2>Bulk import hosts</h2>
+  <p>Format: <code>name,address,username,port,auth_mode[key|password],key_path,password,group,strict_host_key</code></p>
+  <form method="post">
+    {{ form.hidden_tag() }}
+    <label>{{ form.csv_rows.label }} {{ form.csv_rows(rows=12, placeholder='web-1,10.0.0.10,ubuntu,22,key,~/.ssh/id_ed25519,,prod,true') }}</label>
+    {{ form.submit(class_='btn') }}
+  </form>
+</section>
+{% endblock %}

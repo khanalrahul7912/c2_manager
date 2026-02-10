@@ -1,0 +1,14 @@
+{% extends 'base.html' %}
+{% block title %}Sign in{% endblock %}
+{% block content %}
+<section class="card narrow">
+  <h2>Sign in</h2>
+  <form method="post">
+    {{ form.hidden_tag() }}
+    <label>{{ form.username.label }} {{ form.username() }}</label>
+    <label>{{ form.password.label }} {{ form.password() }}</label>
+    <label class="checkbox">{{ form.remember() }} {{ form.remember.label.text }}</label>
+    {{ form.submit(class_='btn') }}
+  </form>
+</section>
+{% endblock %}

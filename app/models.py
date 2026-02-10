@@ -31,9 +31,22 @@ class Host(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), nullable=False)
     address = db.Column(db.String(255), nullable=False)
+    group_name = db.Column(db.String(80), nullable=False, default="default")
     port = db.Column(db.Integer, nullable=False, default=22)
     username = db.Column(db.String(80), nullable=False)
+    auth_mode = db.Column(db.String(20), nullable=False, default="key")
     key_path = db.Column(db.String(255), nullable=True)
+    password_encrypted = db.Column(db.Text, nullable=True)
+    strict_host_key = db.Column(db.Boolean, default=True, nullable=False)
+
+    use_jump_host = db.Column(db.Boolean, default=False, nullable=False)
+    jump_address = db.Column(db.String(255), nullable=True)
+    jump_port = db.Column(db.Integer, nullable=False, default=22)
+    jump_username = db.Column(db.String(80), nullable=True)
+    jump_auth_mode = db.Column(db.String(20), nullable=False, default="key")
+    jump_key_path = db.Column(db.String(255), nullable=True)
+    jump_password_encrypted = db.Column(db.Text, nullable=True)
+
     is_active = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 

@@ -23,8 +23,15 @@ body {
   text-decoration: none;
 }
 
+.topnav {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
 .container {
-  max-width: 1100px;
+  max-width: 1250px;
   margin: 1rem auto;
   padding: 0 1rem;
 }
@@ -32,6 +39,10 @@ body {
 .grid {
   display: grid;
   gap: 1rem;
+}
+
+.two-col {
+  grid-template-columns: 1.2fr 1fr;
 }
 
 .card {
@@ -42,13 +53,19 @@ body {
 }
 
 .narrow {
-  max-width: 500px;
+  max-width: 560px;
 }
 
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 0.5rem;
+}
+
+.toolbar {
+  display: flex;
+  gap: 0.5rem;
 }
 
 label {
@@ -56,7 +73,9 @@ label {
   margin: 0.5rem 0;
 }
 
-input, textarea {
+input,
+textarea,
+select {
   width: 100%;
   margin-top: 0.25rem;
   border: 1px solid #c9d3e4;
@@ -69,6 +88,15 @@ input, textarea {
   width: auto;
 }
 
+.multi-select {
+  min-height: 260px;
+}
+
+.inline-form {
+  display: flex;
+  max-width: 260px;
+}
+
 .btn {
   border: 0;
   border-radius: 8px;
@@ -79,15 +107,22 @@ input, textarea {
   text-decoration: none;
 }
 
+.btn.ghost {
+  background: #ebf1ff;
+  color: #1b3f85;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
 }
 
-th, td {
+th,
+td {
   border-bottom: 1px solid #e5ebf6;
   padding: 0.5rem;
   text-align: left;
+  vertical-align: top;
 }
 
 .flashes {
@@ -101,10 +136,21 @@ th, td {
   margin-bottom: 0.5rem;
 }
 
-.flash.success { background: #daf4df; }
-.flash.warning { background: #fff3cd; }
-.flash.danger { background: #f8d7da; }
-.flash.info { background: #d1ecf1; }
+.flash.success {
+  background: #daf4df;
+}
+
+.flash.warning {
+  background: #fff3cd;
+}
+
+.flash.danger {
+  background: #f8d7da;
+}
+
+.flash.info {
+  background: #d1ecf1;
+}
 
 .execution {
   border: 1px solid #e5ebf6;
@@ -117,6 +163,7 @@ th, td {
   display: flex;
   gap: 1rem;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .pill {
@@ -127,8 +174,13 @@ th, td {
   background: #e2e8f0;
 }
 
-.pill.success { background: #daf4df; }
-.pill.failed { background: #f8d7da; }
+.pill.success {
+  background: #daf4df;
+}
+
+.pill.failed {
+  background: #f8d7da;
+}
 
 pre {
   white-space: pre-wrap;
@@ -141,4 +193,11 @@ pre {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.8rem;
+}
+
+@media (max-width: 960px) {
+  .two-col,
+  .output-grid {
+    grid-template-columns: 1fr;
+  }
 }

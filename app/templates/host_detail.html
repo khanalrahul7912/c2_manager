@@ -4,6 +4,8 @@
 <section class="card">
   <h2>{{ host.name }}</h2>
   <p><strong>Endpoint:</strong> {{ host.username }}@{{ host.address }}:{{ host.port }}</p>
+  <p><strong>Group:</strong> {{ host.group_name }} | <strong>Auth:</strong> {{ host.auth_mode }} | <strong>Strict host key:</strong> {{ 'enabled' if host.strict_host_key else 'disabled' }}</p>
+  <p><strong>Jump host:</strong> {{ host.jump_username }}@{{ host.jump_address }}:{{ host.jump_port }}{% if not host.use_jump_host %} (disabled){% endif %}</p>
   <form method="post">
     {{ form.hidden_tag() }}
     <label>{{ form.command.label }} {{ form.command(rows=4, placeholder='uname -a') }}</label>

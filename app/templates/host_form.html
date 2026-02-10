@@ -5,11 +5,26 @@
   <h2>{{ title }}</h2>
   <form method="post">
     {{ form.hidden_tag() }}
+    <h3>Target host</h3>
     <label>{{ form.name.label }} {{ form.name() }}</label>
     <label>{{ form.address.label }} {{ form.address() }}</label>
+    <label>{{ form.group_name.label }} {{ form.group_name(placeholder='linux-prod') }}</label>
     <label>{{ form.port.label }} {{ form.port() }}</label>
     <label>{{ form.username.label }} {{ form.username() }}</label>
+    <label>{{ form.auth_mode.label }} {{ form.auth_mode() }}</label>
     <label>{{ form.key_path.label }} {{ form.key_path(placeholder='~/.ssh/id_ed25519') }}</label>
+    <label>{{ form.password.label }} {{ form.password(autocomplete='new-password') }}</label>
+    <label class="checkbox">{{ form.strict_host_key() }} {{ form.strict_host_key.label.text }}</label>
+
+    <h3>Jump host (optional)</h3>
+    <label class="checkbox">{{ form.use_jump_host() }} {{ form.use_jump_host.label.text }}</label>
+    <label>{{ form.jump_address.label }} {{ form.jump_address(placeholder='10.0.0.20') }}</label>
+    <label>{{ form.jump_port.label }} {{ form.jump_port() }}</label>
+    <label>{{ form.jump_username.label }} {{ form.jump_username() }}</label>
+    <label>{{ form.jump_auth_mode.label }} {{ form.jump_auth_mode() }}</label>
+    <label>{{ form.jump_key_path.label }} {{ form.jump_key_path(placeholder='~/.ssh/id_ed25519') }}</label>
+    <label>{{ form.jump_password.label }} {{ form.jump_password(autocomplete='new-password') }}</label>
+
     <label class="checkbox">{{ form.is_active() }} {{ form.is_active.label.text }}</label>
     {{ form.submit(class_='btn') }}
   </form>

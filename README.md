@@ -1,38 +1,19 @@
 # RemoteOps (SSH-based)
 
-RemoteOps is a Python 3.12 Flask control plane for legitimate remote administration over SSH.
+RemoteOps is a Python 3.12 Flask control plane for **legitimate remote administration over SSH**. It provides:
 
-## Included features
-
-- Authentication with role-based controls (`admin` / `operator`).
-- Host inventory with grouping, active/disabled status, and per-host strict host key mode.
-- Single-host command execution with persistent history.
-- Bulk host import from CSV-like lines in the UI.
-- Bulk command execution across many hosts concurrently (thread pool).
-- cPanel Passenger-compatible startup file (`passenger_wsgi.py`).
-
-> This project intentionally does **not** implement reverse-shell listeners or C2-style handlers.
+- Authenticated operator access with role-based controls.
+- Managed host inventory.
+- Remote command execution over SSH and captured stdout/stderr.
+- Persistent execution history and auditing basics.
+- cPanel Passenger-compatible entrypoint (`passenger_wsgi.py`).
 
 ## Security model
 
 - Uses SSH transport (no reverse shells).
-- Supports strict host key validation by default.
-- Host key auto-add is configurable per host (disable strict mode only for trusted internal assets).
-- Admin-only host management and bulk import.
-
-## Fix for common error (`known_hosts`)
-
-If you see:
-
-- `SSH execution failed: Server 'localhost' not found in known_hosts`
-
-then either:
-
-1. add host keys to `~/.ssh/known_hosts`, e.g.:
-   ```bash
-   ssh-keyscan -H localhost >> ~/.ssh/known_hosts
-   ```
-2. or edit that host and uncheck **Strict host key validation**.
+- Requires authenticated users.
+- Admin-only host management.
+- Host key checking uses Paramiko `RejectPolicy` (host keys must be known in `~/.ssh/known_hosts`).
 
 ## Local setup (Python 3.12)
 
@@ -43,7 +24,7 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Initialize DB and create admin:
+Initialize database and create admin:
 
 ```bash
 flask --app app db init
@@ -62,39 +43,26 @@ flask --app app run --host 0.0.0.0 --port 5000
 
 1. Create a Python App in cPanel (Python 3.12).
 2. Point application root to this project directory.
-3. Install dependencies with app venv pip:
+3. Install dependencies with your app virtualenv pip:
    ```bash
-   ~/virtualenv/<cpanel_user>/<app_root>/3.12/bin/pip install -r ~/<cpanel_user>/<app_root>/requirements.txt
+   ~/virtualenv/python_proj/3.12/bin/pip install -r requirements.txt
    ```
-4. Set app environment vars (`SECRET_KEY`, `DATABASE_URL`, `ADMIN_PASSWORD`).
-5. Startup file: `passenger_wsgi.py`, entry point: `application`.
-6. Run migrations in app venv:
+4. Ensure environment variables are configured in cPanel (at least `SECRET_KEY`, `DATABASE_URL`, `ADMIN_PASSWORD`).
+5. Use `passenger_wsgi.py` as the startup file.
+6. Execute migrations from terminal with that app's Python:
    ```bash
-   source ~/virtualenv/<cpanel_user>/<app_root>/3.12/bin/activate
+   source ~/virtualenv/python_proj/3.12/bin/activate
    flask --app app db upgrade
    ADMIN_PASSWORD='strong-password' flask --app app create-admin
    ```
-7. Restart app from cPanel.
-
-## cPanel "No such application" troubleshooting
-
-If cPanel reports:
-
-- `No such application (or application not configured) "raahul/c2_manager"`
-
-use this checklist:
-
-1. In cPanel Setup Python App, confirm exact root path (`raahul/c2_manager`).
-2. Confirm startup file (`passenger_wsgi.py`) and entry point (`application`).
-3. Save, then restart app.
-4. Reinstall dependencies in that app virtualenv.
-5. If still broken, remove/recreate the Python App entry so Passenger re-registers mapping.
+7. Restart the Python app from cPanel.
 
 ## Production hardening checklist
 
-- Run behind HTTPS.
+- Put the app behind HTTPS only.
 - Use MySQL/PostgreSQL instead of SQLite.
-- Restrict access to trusted admin networks.
-- Rotate SSH keys and app secrets.
-- Enable centralized logging and alerting.
-- Back up DB and test restore.
+- Enforce strong password policy and MFA at your SSO boundary.
+- Restrict source IPs to company management ranges.
+- Configure centralized logs and alerting.
+- Rotate SSH keys and app secrets regularly.
+- Backup the database and test restoration.

@@ -31,11 +31,9 @@ class Host(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), nullable=False)
     address = db.Column(db.String(255), nullable=False)
-    group_name = db.Column(db.String(80), nullable=False, default="default")
     port = db.Column(db.Integer, nullable=False, default=22)
     username = db.Column(db.String(80), nullable=False)
     key_path = db.Column(db.String(255), nullable=True)
-    strict_host_key = db.Column(db.Boolean, default=True, nullable=False)
     is_active = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 

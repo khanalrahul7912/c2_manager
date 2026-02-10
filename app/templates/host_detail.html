@@ -4,7 +4,6 @@
 <section class="card">
   <h2>{{ host.name }}</h2>
   <p><strong>Endpoint:</strong> {{ host.username }}@{{ host.address }}:{{ host.port }}</p>
-  <p><strong>Group:</strong> {{ host.group_name }} | <strong>Strict host key:</strong> {{ 'enabled' if host.strict_host_key else 'disabled' }}</p>
   <form method="post">
     {{ form.hidden_tag() }}
     <label>{{ form.command.label }} {{ form.command(rows=4, placeholder='uname -a') }}</label>

@@ -201,3 +201,15 @@ pre {
     grid-template-columns: 1fr;
   }
 }
+
+
+.pagination-row {
+  margin-top: 0.8rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.flash ul {
+  margin: 0.4rem 0 0 1rem;
+}

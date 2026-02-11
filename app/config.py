@@ -3,15 +3,35 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from sqlalchemy.engine import make_url
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+INSTANCE_DB_PATH = (BASE_DIR / "instance" / "app.db").resolve()
+
+
+def _database_uri() -> str:
+    raw = os.getenv("DATABASE_URL", "").strip()
+    if not raw:
+        return f"sqlite:///{INSTANCE_DB_PATH}"
+
+    url = make_url(raw)
+    if url.drivername.startswith("sqlite"):
+        db_name = url.database or ""
+        if db_name in {":memory:", ""}:
+            return raw
+
+        db_path = Path(db_name).expanduser()
+        if not db_path.is_absolute():
+            db_path = (BASE_DIR / db_path).resolve()
+        return f"sqlite:///{db_path}"
+
+    return raw
 
 
 class Config:
     SECRET_KEY = os.getenv("SECRET_KEY", "replace-me-in-production")
-    SQLALCHEMY_DATABASE_URI = os.getenv(
-        "DATABASE_URL", f"sqlite:///{BASE_DIR / 'instance' / 'app.db'}"
-    )
+    SQLALCHEMY_DATABASE_URI = _database_uri()
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     REMOTE_COMMAND_TIMEOUT = int(os.getenv("REMOTE_COMMAND_TIMEOUT", "30"))
     MAX_CONTENT_LENGTH = 1 * 1024 * 1024

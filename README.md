@@ -11,6 +11,7 @@ RemoteOps is a Python 3.12 Flask control plane for legitimate remote administrat
 - Single-host command execution with persistent history.
 - Bulk host import from CSV-like lines in UI.
 - Bulk command execution across many hosts concurrently.
+- Pagination on dashboard, host history, and bulk operation history.
 - cPanel Passenger-compatible startup (`passenger_wsgi.py`).
 
 > This project intentionally does **not** implement reverse-shell listeners or C2-style handlers.
@@ -29,6 +30,18 @@ RemoteOps is a Python 3.12 Flask control plane for legitimate remote administrat
 - `DATA_ENCRYPTION_KEY`: required to encrypt/decrypt SSH and jump-host passwords.
 - `DATABASE_URL`: DB connection URL.
 - `ADMIN_PASSWORD`: initial admin creation.
+
+## SQLite path behavior fix
+
+If `DATABASE_URL` is SQLite and uses a relative path (for example `sqlite:///instance/app.db`),
+the app now resolves it to an absolute path automatically relative to the project root.
+That avoids failures where cPanel/Passenger starts from a different working directory.
+
+## Login/CSRF and migration fixes
+
+- Login is built on `LoginForm(FlaskForm)` so CSRF token is present.
+- `login` route control flow is corrected and stable.
+- Added `migrations/env.py` with `render_as_batch=True` for SQLite schema changes.
 
 ## Fix for common error (`known_hosts`)
 
@@ -80,26 +93,3 @@ flask --app app run --host 0.0.0.0 --port 5000
 5. Startup file: `passenger_wsgi.py`, entrypoint: `application`.
 6. Run migrations in app venv.
 7. Restart from cPanel.
-
-## cPanel "No such application" troubleshooting
-
-If cPanel reports:
-
-- `No such application (or application not configured) "raahul/c2_manager"`
-
-check:
-
-1. Root path exactly matches app folder (`raahul/c2_manager`).
-2. Startup file and entrypoint are correct.
-3. Save/restart app.
-4. Reinstall dependencies in same app venv.
-5. Recreate Python app entry if mapping stays stale.
-
-## Production hardening checklist
-
-- Use HTTPS only.
-- Prefer PostgreSQL/MySQL over SQLite.
-- Restrict panel access to trusted admin IP ranges.
-- Rotate keys/secrets regularly.
-- Centralize logs and alerts.
-- Backup and restore-test database.

@@ -31,5 +31,15 @@
       {% endfor %}
     </tbody>
   </table>
+
+  <div class="pagination-row">
+    {% if runs_pagination.has_prev %}
+    <a class="btn ghost" href="{{ url_for('main.bulk_operations', page=runs_pagination.prev_num) }}">Prev</a>
+    {% endif %}
+    <span>Page {{ runs_pagination.page }} / {{ runs_pagination.pages or 1 }}</span>
+    {% if runs_pagination.has_next %}
+    <a class="btn ghost" href="{{ url_for('main.bulk_operations', page=runs_pagination.next_num) }}">Next</a>
+    {% endif %}
+  </div>
 </section>
 {% endblock %}

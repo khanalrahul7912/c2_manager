@@ -36,5 +36,15 @@
   {% else %}
   <p>No commands executed on this host yet.</p>
   {% endfor %}
+
+  <div class="pagination-row">
+    {% if executions_pagination.has_prev %}
+    <a class="btn ghost" href="{{ url_for('main.host_detail', host_id=host.id, page=executions_pagination.prev_num) }}">Prev</a>
+    {% endif %}
+    <span>Page {{ executions_pagination.page }} / {{ executions_pagination.pages or 1 }}</span>
+    {% if executions_pagination.has_next %}
+    <a class="btn ghost" href="{{ url_for('main.host_detail', host_id=host.id, page=executions_pagination.next_num) }}">Next</a>
+    {% endif %}
+  </div>
 </section>
 {% endblock %}

@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from functools import wraps
 
-from flask import Blueprint, current_app, abort, flash, redirect, render_template, request, url_for
+from flask import Blueprint, abort, current_app, flash, redirect, render_template, request, url_for
 from flask_login import current_user, login_required, login_user, logout_user
 
 from app.extensions import db
@@ -16,6 +16,16 @@ from app.ssh_service import SSHEndpoint, run_ssh_command
 
 auth_bp = Blueprint("auth", __name__)
 main_bp = Blueprint("main", __name__)
+
+
+PAGE_SIZE_DEFAULT = 15
+
+
+def _page_arg(name: str = "page") -> int:
+    try:
+        return max(1, int(request.args.get(name, "1")))
+    except ValueError:
+        return 1
 
 
 def role_required(*allowed_roles: str):
@@ -46,7 +56,8 @@ def login():
             flash("Login successful.", "success")
             next_url = request.args.get("next")
             return redirect(next_url or url_for("main.dashboard"))
-        flash("Invalid username or password.", "danger")
+        else:
+            flash("Invalid username or password.", "danger")
 
     return render_template("login.html", form=form)
 
@@ -63,19 +74,27 @@ def logout():
 @login_required
 def dashboard():
     group = request.args.get("group", "").strip()
-    query = Host.query.order_by(Host.name.asc())
-    if group:
-        query = query.filter(Host.group_name == group)
+    host_page = _page_arg("host_page")
+    run_page = _page_arg("run_page")
 
-    hosts = query.all()
+    host_query = Host.query.order_by(Host.name.asc())
+    if group:
+        host_query = host_query.filter(Host.group_name == group)
+
+    hosts_pagination = host_query.paginate(page=host_page, per_page=PAGE_SIZE_DEFAULT, error_out=False)
+    runs_pagination = CommandExecution.query.order_by(CommandExecution.started_at.desc()).paginate(
+        page=run_page, per_page=PAGE_SIZE_DEFAULT, error_out=False
+    )
+
     groups = [value[0] for value in db.session.query(Host.group_name).distinct().all() if value[0]]
-    recent_commands = CommandExecution.query.order_by(CommandExecution.started_at.desc()).limit(30).all()
     return render_template(
         "dashboard.html",
-        hosts=hosts,
+        hosts=hosts_pagination.items,
+        hosts_pagination=hosts_pagination,
+        recent_commands=runs_pagination.items,
+        runs_pagination=runs_pagination,
         groups=sorted(groups),
         selected_group=group,
-        recent_commands=recent_commands,
     )
 
 
@@ -84,6 +103,7 @@ def _validate_host_form(form: HostForm) -> bool:
     if form.auth_mode.data == "password" and not form.password.data:
         form.password.errors.append("Password is required when auth mode is password")
         ok = False
+
     if form.use_jump_host.data:
         if not form.jump_address.data or not form.jump_username.data:
             form.jump_address.errors.append("Jump host address and username are required")
@@ -91,6 +111,7 @@ def _validate_host_form(form: HostForm) -> bool:
         if form.jump_auth_mode.data == "password" and not form.jump_password.data:
             form.jump_password.errors.append("Jump host password is required when using jump password auth")
             ok = False
+
     return ok
 
 
@@ -130,6 +151,7 @@ def create_host():
         db.session.commit()
         flash("Host created.", "success")
         return redirect(url_for("main.dashboard"))
+
     return render_template("host_form.html", form=form, title="Add Host")
 
 
@@ -141,6 +163,7 @@ def import_hosts():
     if form.validate_on_submit():
         created = 0
         skipped = 0
+
         for idx, raw_line in enumerate(form.csv_rows.data.splitlines(), start=1):
             line = raw_line.strip()
             if not line:
@@ -162,28 +185,28 @@ def import_hosts():
                 strict_host_key = True
                 if len(parts) > 8 and parts[8]:
                     strict_host_key = parts[8].lower() not in {"false", "0", "no", "off"}
+
                 if auth_mode == "password" and not password:
                     raise ValueError("password missing for password auth")
+
+                db.session.add(
+                    Host(
+                        name=name,
+                        address=address,
+                        username=username,
+                        port=port,
+                        auth_mode=auth_mode,
+                        key_path=key_path,
+                        password_encrypted=encrypt_secret(password) if password else None,
+                        group_name=group_name,
+                        strict_host_key=strict_host_key,
+                        is_active=True,
+                    )
+                )
+                created += 1
             except Exception as exc:
                 skipped += 1
                 flash(f"Line {idx}: skipped ({exc})", "warning")
-                continue
-
-            db.session.add(
-                Host(
-                    name=name,
-                    address=address,
-                    username=username,
-                    port=port,
-                    auth_mode=auth_mode,
-                    key_path=key_path,
-                    password_encrypted=encrypt_secret(password) if password else None,
-                    group_name=group_name,
-                    strict_host_key=strict_host_key,
-                    is_active=True,
-                )
-            )
-            created += 1
 
         db.session.commit()
         flash(f"Import complete: {created} host(s) created, {skipped} skipped.", "info")
@@ -198,6 +221,7 @@ def import_hosts():
 def edit_host(host_id: int):
     host = db.get_or_404(Host, host_id)
     form = HostForm(obj=host)
+
     if request.method == "GET":
         form.password.data = ""
         form.jump_password.data = ""
@@ -207,6 +231,7 @@ def edit_host(host_id: int):
         db.session.commit()
         flash("Host updated.", "success")
         return redirect(url_for("main.dashboard"))
+
     return render_template("host_form.html", form=form, title=f"Edit Host: {host.name}")
 
 
@@ -271,7 +296,9 @@ def _complete_execution(execution: CommandExecution, result) -> None:
 def bulk_operations():
     form = BulkCommandForm()
     hosts = Host.query.filter_by(is_active=True).order_by(Host.group_name.asc(), Host.name.asc()).all()
-    form.host_ids.choices = [(host.id, f"[{host.group_name}] {host.name} ({host.username}@{host.address}:{host.port})") for host in hosts]
+    form.host_ids.choices = [
+        (host.id, f"[{host.group_name}] {host.name} ({host.username}@{host.address}:{host.port})") for host in hosts
+    ]
 
     if form.validate_on_submit():
         selected_hosts = [host for host in hosts if host.id in form.host_ids.data]
@@ -281,7 +308,6 @@ def bulk_operations():
 
         command = form.command.data.strip()
         max_workers = min(max(len(selected_hosts), 1), 8)
-
         success_count = 0
         failure_count = 0
 
@@ -289,7 +315,9 @@ def bulk_operations():
         execution_map = {host.id: _create_execution(host, command) for host in selected_hosts}
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(_run_command_for_host, host, command, timeout): host for host in selected_hosts}
+            futures = {
+                executor.submit(_run_command_for_host, host, command, timeout): host for host in selected_hosts
+            }
             for future in as_completed(futures):
                 host = futures[future]
                 execution = execution_map[host.id]
@@ -300,7 +328,7 @@ def bulk_operations():
                         success_count += 1
                     else:
                         failure_count += 1
-                except Exception as exc:
+                except Exception as exc:  # pragma: no cover
                     failure_count += 1
                     execution.status = "failed"
                     execution.stderr = f"Unexpected error during execution: {exc}"
@@ -308,14 +336,19 @@ def bulk_operations():
                     db.session.commit()
                     flash(f"{host.name}: unexpected error during execution: {exc}", "danger")
 
-        flash(
-            f"Bulk execution finished: {success_count} success, {failure_count} failed.",
-            "info",
-        )
+        flash(f"Bulk execution finished: {success_count} success, {failure_count} failed.", "info")
         return redirect(url_for("main.bulk_operations"))
 
-    recent_bulk = CommandExecution.query.order_by(CommandExecution.started_at.desc()).limit(100).all()
-    return render_template("bulk_operations.html", form=form, recent_bulk=recent_bulk)
+    run_page = _page_arg("page")
+    runs_pagination = CommandExecution.query.order_by(CommandExecution.started_at.desc()).paginate(
+        page=run_page, per_page=PAGE_SIZE_DEFAULT, error_out=False
+    )
+    return render_template(
+        "bulk_operations.html",
+        form=form,
+        recent_bulk=runs_pagination.items,
+        runs_pagination=runs_pagination,
+    )
 
 
 @main_bp.route("/hosts/<int:host_id>", methods=["GET", "POST"])
@@ -323,12 +356,6 @@ def bulk_operations():
 def host_detail(host_id: int):
     host = db.get_or_404(Host, host_id)
     form = CommandForm()
-    executions = (
-        CommandExecution.query.filter_by(host_id=host.id)
-        .order_by(CommandExecution.started_at.desc())
-        .limit(50)
-        .all()
-    )
 
     if form.validate_on_submit():
         command = form.command.data.strip()
@@ -338,4 +365,15 @@ def host_detail(host_id: int):
         flash(f"Command completed with status {execution.status}.", "info")
         return redirect(url_for("main.host_detail", host_id=host.id))
 
-    return render_template("host_detail.html", host=host, form=form, executions=executions)
+    page = _page_arg("page")
+    executions_pagination = CommandExecution.query.filter_by(host_id=host.id).order_by(
+        CommandExecution.started_at.desc()
+    ).paginate(page=page, per_page=PAGE_SIZE_DEFAULT, error_out=False)
+
+    return render_template(
+        "host_detail.html",
+        host=host,
+        form=form,
+        executions=executions_pagination.items,
+        executions_pagination=executions_pagination,
+    )

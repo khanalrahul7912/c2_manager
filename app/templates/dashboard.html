@@ -22,6 +22,8 @@
           {% endfor %}
         </select>
       </label>
+      <input type="hidden" name="host_page" value="1">
+      <input type="hidden" name="run_page" value="1">
     </form>
 
     <table>
@@ -35,7 +37,7 @@
           <td>{{ host.group_name }}</td>
           <td>{{ host.username }}@{{ host.address }}:{{ host.port }}</td>
           <td>{{ host.auth_mode }}</td>
-          <td>{{ "yes" if host.use_jump_host else "no" }}</td>
+          <td>{{ 'yes' if host.use_jump_host else 'no' }}</td>
           <td>{{ 'active' if host.is_active else 'disabled' }}</td>
           <td>
             <a href="{{ url_for('main.host_detail', host_id=host.id) }}">Open</a>
@@ -49,6 +51,15 @@
         {% endfor %}
       </tbody>
     </table>
+    <div class="pagination-row">
+      {% if hosts_pagination.has_prev %}
+      <a class="btn ghost" href="{{ url_for('main.dashboard', group=selected_group, host_page=hosts_pagination.prev_num, run_page=runs_pagination.page) }}">Prev hosts</a>
+      {% endif %}
+      <span>Hosts page {{ hosts_pagination.page }} / {{ hosts_pagination.pages or 1 }}</span>
+      {% if hosts_pagination.has_next %}
+      <a class="btn ghost" href="{{ url_for('main.dashboard', group=selected_group, host_page=hosts_pagination.next_num, run_page=runs_pagination.page) }}">Next hosts</a>
+      {% endif %}
+    </div>
   </article>
 
   <article class="card">
@@ -65,10 +76,19 @@
         <td><code>{{ run.command }}</code></td>
       </tr>
       {% else %}
-      <tr><td colspan="7">No executions yet.</td></tr>
+      <tr><td colspan="5">No executions yet.</td></tr>
       {% endfor %}
       </tbody>
     </table>
+    <div class="pagination-row">
+      {% if runs_pagination.has_prev %}
+      <a class="btn ghost" href="{{ url_for('main.dashboard', group=selected_group, host_page=hosts_pagination.page, run_page=runs_pagination.prev_num) }}">Prev runs</a>
+      {% endif %}
+      <span>Runs page {{ runs_pagination.page }} / {{ runs_pagination.pages or 1 }}</span>
+      {% if runs_pagination.has_next %}
+      <a class="btn ghost" href="{{ url_for('main.dashboard', group=selected_group, host_page=hosts_pagination.page, run_page=runs_pagination.next_num) }}">Next runs</a>
+      {% endif %}
+    </div>
   </article>
 </section>
 {% endblock %}

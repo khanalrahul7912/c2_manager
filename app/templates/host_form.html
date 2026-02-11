@@ -3,6 +3,18 @@
 {% block content %}
 <section class="card narrow">
   <h2>{{ title }}</h2>
+  {% if form.errors %}
+  <div class="flash danger">
+    <strong>Please fix the following errors:</strong>
+    <ul>
+      {% for field, errors in form.errors.items() %}
+        {% for error in errors %}
+        <li>{{ field }}: {{ error }}</li>
+        {% endfor %}
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
   <form method="post">
     {{ form.hidden_tag() }}
     <h3>Target host</h3>

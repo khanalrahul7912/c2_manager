@@ -1,0 +1,215 @@
+:root {
+  color-scheme: light;
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
+
+body {
+  margin: 0;
+  background: #f4f7fb;
+  color: #1d2738;
+}
+
+.topbar {
+  background: #0d1a2b;
+  color: #fff;
+  padding: 0.75rem 1rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.topbar a {
+  color: #b9d2ff;
+  text-decoration: none;
+}
+
+.topnav {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.container {
+  max-width: 1250px;
+  margin: 1rem auto;
+  padding: 0 1rem;
+}
+
+.grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.two-col {
+  grid-template-columns: 1.2fr 1fr;
+}
+
+.card {
+  background: #fff;
+  padding: 1rem;
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(15, 26, 44, 0.08);
+}
+
+.narrow {
+  max-width: 560px;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.toolbar {
+  display: flex;
+  gap: 0.5rem;
+}
+
+label {
+  display: block;
+  margin: 0.5rem 0;
+}
+
+input,
+textarea,
+select {
+  width: 100%;
+  margin-top: 0.25rem;
+  border: 1px solid #c9d3e4;
+  border-radius: 8px;
+  padding: 0.5rem;
+  box-sizing: border-box;
+}
+
+.checkbox input {
+  width: auto;
+}
+
+.multi-select {
+  min-height: 260px;
+}
+
+.inline-form {
+  display: flex;
+  max-width: 260px;
+}
+
+.btn {
+  border: 0;
+  border-radius: 8px;
+  background: #234ea3;
+  color: #fff;
+  padding: 0.6rem 0.9rem;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn.ghost {
+  background: #ebf1ff;
+  color: #1b3f85;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  border-bottom: 1px solid #e5ebf6;
+  padding: 0.5rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.flashes {
+  list-style: none;
+  padding: 0;
+}
+
+.flash {
+  padding: 0.6rem;
+  border-radius: 6px;
+  margin-bottom: 0.5rem;
+}
+
+.flash.success {
+  background: #daf4df;
+}
+
+.flash.warning {
+  background: #fff3cd;
+}
+
+.flash.danger {
+  background: #f8d7da;
+}
+
+.flash.info {
+  background: #d1ecf1;
+}
+
+.execution {
+  border: 1px solid #e5ebf6;
+  border-radius: 8px;
+  padding: 0.8rem;
+  margin-bottom: 0.8rem;
+}
+
+.execution header {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.pill {
+  display: inline-block;
+  border-radius: 30px;
+  font-size: 0.8rem;
+  padding: 0.2rem 0.5rem;
+  background: #e2e8f0;
+}
+
+.pill.success {
+  background: #daf4df;
+}
+
+.pill.failed {
+  background: #f8d7da;
+}
+
+pre {
+  white-space: pre-wrap;
+  background: #f6f8fc;
+  padding: 0.7rem;
+  border-radius: 6px;
+}
+
+.output-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.8rem;
+}
+
+@media (max-width: 960px) {
+  .two-col,
+  .output-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+.pagination-row {
+  margin-top: 0.8rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.flash ul {
+  margin: 0.4rem 0 0 1rem;
+}

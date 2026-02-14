@@ -270,13 +270,14 @@ def _build_jump(host: Host) -> SSHEndpoint | None:
     )
 
 
-def _run_command_for_host(host: Host, command: str, timeout: int):
+def _run_command_for_host(host: Host, command: str, timeout: int, target: SSHEndpoint, jump_host: SSHEndpoint | None):
+    """Run SSH command for a host. Target and jump_host must be built before calling."""
     return host.id, run_ssh_command(
-        target=_build_target(host),
+        target=target,
         command=command,
         timeout=timeout,
         strict_host_key=host.strict_host_key,
-        jump_host=_build_jump(host),
+        jump_host=jump_host,
     )
 
 
@@ -330,9 +331,27 @@ def bulk_operations():
         app = current_app._get_current_object()  # Get app instance for thread context
         execution_map = {host.id: _create_execution(host, command, user_id) for host in selected_hosts}
 
+        # Build SSH endpoints before ThreadPoolExecutor to avoid app context issues
+        host_configs = {
+            host.id: {
+                'host': host,
+                'target': _build_target(host),
+                'jump_host': _build_jump(host)
+            }
+            for host in selected_hosts
+        }
+
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
-                executor.submit(_run_command_for_host, host, command, timeout): host for host in selected_hosts
+                executor.submit(
+                    _run_command_for_host, 
+                    config['host'], 
+                    command, 
+                    timeout,
+                    config['target'],
+                    config['jump_host']
+                ): config['host'] 
+                for config in host_configs.values()
             }
             for future in as_completed(futures):
                 host = futures[future]

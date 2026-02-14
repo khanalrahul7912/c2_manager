@@ -283,15 +283,16 @@ class ShellListener:
 _listener: Optional[ShellListener] = None
 
 
-def get_listener(app: Flask) -> ShellListener:
+def get_listener(app: Flask, port: int = 5000) -> ShellListener:
     """Get or create the global listener instance."""
     global _listener
     if _listener is None:
-        _listener = ShellListener(app)
+        _listener = ShellListener(app, port)
     return _listener
 
 
 def start_listener(app: Flask):
     """Start the reverse shell listener."""
-    listener = get_listener(app)
+    port = app.config.get('REVERSE_SHELL_PORT', 5000)
+    listener = get_listener(app, port)
     listener.start()

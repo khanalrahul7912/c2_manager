@@ -21,7 +21,7 @@
     </div>
     <span class="terminal-history-title">{{ terminal_title | default('Terminal History') }}</span>
     <div class="terminal-history-actions">
-      <button type="button" onclick="copyTerminalHistory()" title="Copy all visible output">📋 Copy</button>
+      <button type="button" onclick="copyTerminalHistory(this)" title="Copy all visible output">📋 Copy</button>
     </div>
   </div>
 
@@ -76,7 +76,7 @@
 {% endif %}
 
 <script>
-function copyTerminalHistory() {
+function copyTerminalHistory(btn) {
   const body = document.getElementById('terminal-history-body');
   if (!body) return;
 
@@ -89,12 +89,11 @@ function copyTerminalHistory() {
     const stderr = entry.querySelector('.terminal-stderr');
     if (prompt) text += '$ ' + prompt.textContent.trim() + '\n';
     if (stdout) text += stdout.textContent.trim() + '\n';
-    if (stderr) text += 'stderr: ' + stderr.textContent.replace(/^stderr:\s*/, '').trim() + '\n';
+    if (stderr) text += 'stderr: ' + stderr.textContent.trim() + '\n';
     text += '\n';
   });
 
   navigator.clipboard.writeText(text.trimEnd()).then(() => {
-    const btn = event.target.closest('button');
     const orig = btn.textContent;
     btn.textContent = '✓ Copied!';
     setTimeout(() => btn.textContent = orig, 1500);

@@ -8,43 +8,20 @@
   <p><strong>Jump host:</strong> {{ host.jump_username }}@{{ host.jump_address }}:{{ host.jump_port }}{% if not host.use_jump_host %} (disabled){% endif %}</p>
   <form method="post">
     {{ form.hidden_tag() }}
-    <label>{{ form.command.label }} {{ form.command(rows=4, placeholder='uname -a') }}</label>
+    <label>{{ form.command.label }} {{ form.command(rows=4, placeholder='uname -a', class_='command-input') }}</label>
     {{ form.submit(class_='btn') }}
   </form>
 </section>
 
 <section class="card">
-  <h3>Execution history</h3>
-  {% for run in executions %}
-  <article class="execution">
-    <header>
-      <code>{{ run.command }}</code>
-      <span class="pill {{ run.status }}">{{ run.status }}</span>
-      <small>{{ run.started_at.strftime('%Y-%m-%d %H:%M:%S') }}</small>
-    </header>
-    <div class="output-grid">
-      <div>
-        <h4>stdout</h4>
-        <pre>{{ run.stdout }}</pre>
-      </div>
-      <div>
-        <h4>stderr</h4>
-        <pre>{{ run.stderr }}</pre>
-      </div>
-    </div>
-  </article>
-  {% else %}
-  <p>No commands executed on this host yet.</p>
-  {% endfor %}
-
-  <div class="pagination-row">
-    {% if executions_pagination.has_prev %}
-    <a class="btn ghost" href="{{ url_for('main.host_detail', host_id=host.id, page=executions_pagination.prev_num) }}">Prev</a>
-    {% endif %}
-    <span>Page {{ executions_pagination.page }} / {{ executions_pagination.pages or 1 }}</span>
-    {% if executions_pagination.has_next %}
-    <a class="btn ghost" href="{{ url_for('main.host_detail', host_id=host.id, page=executions_pagination.next_num) }}">Next</a>
-    {% endif %}
-  </div>
+  <h3>Execution History</h3>
+  {% with terminal_title=host.username ~ '@' ~ host.address ~ ':' ~ host.port,
+          shell_type='ssh',
+          pagination=executions_pagination,
+          detail_url='main.host_detail',
+          detail_id_name='host_id',
+          detail_id_value=host.id %}
+    {% include 'components/terminal_history.html' %}
+  {% endwith %}
 </section>
 {% endblock %}

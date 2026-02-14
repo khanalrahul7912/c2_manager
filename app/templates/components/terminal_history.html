@@ -1,0 +1,113 @@
+{#
+  Unified terminal-style command history component.
+  Works for both SSH (CommandExecution) and Reverse Shell (ShellExecution).
+
+  Parameters:
+    terminal_title  – text shown in the header bar
+    executions      – list of execution objects (CommandExecution or ShellExecution)
+    shell_type      – "ssh" or "reverse" (controls which fields to read)
+    pagination      – pagination object
+    detail_url      – name of the url_for endpoint for pagination links
+    detail_id_name  – name of the id kwarg for the pagination url (e.g. "host_id" or "shell_id")
+    detail_id_value – the actual id value
+#}
+
+<div class="terminal-history" id="terminal-history">
+  <div class="terminal-history-header">
+    <div class="terminal-history-dots">
+      <span class="dot-red"></span>
+      <span class="dot-yellow"></span>
+      <span class="dot-green"></span>
+    </div>
+    <span class="terminal-history-title">{{ terminal_title | default('Terminal History') }}</span>
+    <div class="terminal-history-actions">
+      <button type="button" onclick="copyTerminalHistory()" title="Copy all visible output">📋 Copy</button>
+    </div>
+  </div>
+
+  <div class="terminal-history-body" id="terminal-history-body">
+    {% if executions %}
+      {% for run in executions %}
+      <div class="terminal-entry">
+        <div class="terminal-entry-meta">
+          <span class="pill {{ run.status }}">{{ run.status }}</span>
+          <span>{{ run.started_at.strftime('%Y-%m-%d %H:%M:%S') }}</span>
+          {% if run.user is defined and run.user %}
+          <span>by {{ run.user.username }}</span>
+          {% endif %}
+          {% if shell_type == 'ssh' %}
+            {% if run.completed_at and run.started_at %}
+            <span>({{ ((run.completed_at - run.started_at).total_seconds()) | round(2) }}s)</span>
+            {% endif %}
+          {% else %}
+            {% if run.execution_time is defined and run.execution_time %}
+            <span>({{ run.execution_time | round(2) }}s)</span>
+            {% elif run.completed_at and run.started_at %}
+            <span>({{ ((run.completed_at - run.started_at).total_seconds()) | round(2) }}s)</span>
+            {% endif %}
+          {% endif %}
+        </div>
+        <div class="terminal-prompt">{{ run.command }}</div>
+        {% if shell_type == 'ssh' %}
+          {% if run.stdout %}<div class="terminal-stdout">{{ run.stdout }}</div>{% endif %}
+          {% if run.stderr %}<div class="terminal-stderr">{{ run.stderr }}</div>{% endif %}
+        {% else %}
+          {% if run.output %}<div class="terminal-stdout">{{ run.output }}</div>{% endif %}
+          {% if run.stderr %}<div class="terminal-stderr">{{ run.stderr }}</div>{% endif %}
+        {% endif %}
+      </div>
+      {% endfor %}
+    {% else %}
+      <div class="terminal-empty">No commands executed yet.</div>
+    {% endif %}
+  </div>
+</div>
+
+{% if pagination is defined and pagination %}
+<div class="pagination-row">
+  {% if pagination.has_prev %}
+  <a class="btn ghost" href="{{ url_for(detail_url, **{detail_id_name: detail_id_value, 'page': pagination.prev_num}) }}">Prev</a>
+  {% endif %}
+  <span>Page {{ pagination.page }} / {{ pagination.pages or 1 }}</span>
+  {% if pagination.has_next %}
+  <a class="btn ghost" href="{{ url_for(detail_url, **{detail_id_name: detail_id_value, 'page': pagination.next_num}) }}">Next</a>
+  {% endif %}
+</div>
+{% endif %}
+
+<script>
+function copyTerminalHistory() {
+  const body = document.getElementById('terminal-history-body');
+  if (!body) return;
+
+  /* Build a plain-text version that is easy to read when pasted */
+  const entries = body.querySelectorAll('.terminal-entry');
+  let text = '';
+  entries.forEach(entry => {
+    const prompt = entry.querySelector('.terminal-prompt');
+    const stdout = entry.querySelector('.terminal-stdout');
+    const stderr = entry.querySelector('.terminal-stderr');
+    if (prompt) text += '$ ' + prompt.textContent.trim() + '\n';
+    if (stdout) text += stdout.textContent.trim() + '\n';
+    if (stderr) text += 'stderr: ' + stderr.textContent.replace(/^stderr:\s*/, '').trim() + '\n';
+    text += '\n';
+  });
+
+  navigator.clipboard.writeText(text.trimEnd()).then(() => {
+    const btn = event.target.closest('button');
+    const orig = btn.textContent;
+    btn.textContent = '✓ Copied!';
+    setTimeout(() => btn.textContent = orig, 1500);
+  }).catch(() => {
+    /* Fallback for insecure contexts */
+    const ta = document.createElement('textarea');
+    ta.value = text.trimEnd();
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+  });
+}
+</script>

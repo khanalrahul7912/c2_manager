@@ -51,12 +51,9 @@
         <label>{{ shell_form.shell_ids.label }}
           {{ shell_form.shell_ids(size=12, class_='multi-select') }}
         </label>
-        <label>{{ shell_form.command.label }} {{ shell_form.command(rows=4, placeholder='whoami') }}</label>
+        <label>{{ shell_form.command.label }} {{ shell_form.command(rows=4, placeholder='whoami', class_='command-input') }}</label>
         {{ shell_form.submit(class_='btn') }}
       </form>
-      <p style="margin-top: 0.5rem; color: #666; font-size: 0.9rem;">
-        💡 Tip: Only connected shells can execute commands. Offline shells will be marked as failed.
-      </p>
     </section>
 
     <section class="card" style="margin-top: 1rem;">
@@ -66,10 +63,10 @@
           <a href="{{ url_for('main.export_shell_executions') }}" class="btn ghost">Export CSV</a>
         </div>
       </div>
-      <table>
+      <table class="bulk-results-table">
         <thead>
           <tr>
-            <th>Shell</th>
+            <th>Target</th>
             <th>Status</th>
             <th>Started</th>
             <th>Duration</th>
@@ -86,15 +83,13 @@
             <td>
               {% if run.completed_at and run.started_at %}
               {{ ((run.completed_at - run.started_at).total_seconds()) | round(2) }}s
-              {% else %}
-              -
-              {% endif %}
+              {% else %}-{% endif %}
             </td>
-            <td><code>{{ run.command[:80] }}{% if run.command|length > 80 %}...{% endif %}</code></td>
-            <td><code>{{ (run.output or '')[:100] }}{% if (run.output or '')|length > 100 %}...{% endif %}</code></td>
+            <td><code>{{ run.command[:80] }}{% if run.command|length > 80 %}…{% endif %}</code></td>
+            <td class="output-preview"><code>{{ (run.output or '')[:100] }}{% if (run.output or '')|length > 100 %}…{% endif %}</code></td>
           </tr>
           {% else %}
-          <tr><td colspan="6">No shell operation history yet.</td></tr>
+          <tr><td colspan="6">No operation history yet.</td></tr>
           {% endfor %}
         </tbody>
       </table>
@@ -119,7 +114,7 @@
         <label>{{ ssh_form.host_ids.label }}
           {{ ssh_form.host_ids(size=12, class_='multi-select') }}
         </label>
-        <label>{{ ssh_form.command.label }} {{ ssh_form.command(rows=4, placeholder='uptime') }}</label>
+        <label>{{ ssh_form.command.label }} {{ ssh_form.command(rows=4, placeholder='uptime', class_='command-input') }}</label>
         {{ ssh_form.submit(class_='btn') }}
       </form>
     </section>
@@ -131,19 +126,33 @@
           <a href="{{ url_for('main.export_ssh_executions') }}" class="btn ghost">Export CSV</a>
         </div>
       </div>
-      <table>
-        <thead><tr><th>Host</th><th>Status</th><th>Started</th><th>Command</th><th>stderr</th></tr></thead>
+      <table class="bulk-results-table">
+        <thead>
+          <tr>
+            <th>Target</th>
+            <th>Status</th>
+            <th>Started</th>
+            <th>Duration</th>
+            <th>Command</th>
+            <th>Output Preview</th>
+          </tr>
+        </thead>
         <tbody>
           {% for run in ssh_recent_bulk %}
           <tr>
-            <td>{{ run.host.name }}</td>
+            <td><a href="{{ url_for('main.host_detail', host_id=run.host.id) }}">{{ run.host.name }}</a></td>
             <td><span class="pill {{ run.status }}">{{ run.status }}</span></td>
             <td>{{ run.started_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
-            <td><code>{{ run.command }}</code></td>
-            <td><code>{{ run.stderr[:140] }}</code></td>
+            <td>
+              {% if run.completed_at and run.started_at %}
+              {{ ((run.completed_at - run.started_at).total_seconds()) | round(2) }}s
+              {% else %}-{% endif %}
+            </td>
+            <td><code>{{ run.command[:80] }}{% if run.command|length > 80 %}…{% endif %}</code></td>
+            <td class="output-preview"><code>{{ (run.stdout or '')[:100] }}{% if (run.stdout or '')|length > 100 %}…{% endif %}{% if run.stderr %} <span style="color:#dc3545">{{ run.stderr[:60] }}</span>{% endif %}</code></td>
           </tr>
           {% else %}
-          <tr><td colspan="5">No SSH operation history yet.</td></tr>
+          <tr><td colspan="6">No operation history yet.</td></tr>
           {% endfor %}
         </tbody>
       </table>

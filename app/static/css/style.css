@@ -431,3 +431,176 @@ code {
   background: #f6f8fc;
   border: 2px solid var(--border-color);
 }
+
+/* ===== Unified Terminal History ===== */
+.terminal-history {
+  background: #1a1b26;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+  margin: 1rem 0;
+  border: 1px solid #2a2b3d;
+}
+
+.terminal-history-header {
+  background: #24253a;
+  padding: 0.6rem 1rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #2a2b3d;
+  user-select: none;
+}
+
+.terminal-history-dots {
+  display: flex;
+  gap: 6px;
+}
+
+.terminal-history-dots span {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.terminal-history-dots .dot-red { background: #ff5f56; }
+.terminal-history-dots .dot-yellow { background: #ffbd2e; }
+.terminal-history-dots .dot-green { background: #27c93f; }
+
+.terminal-history-title {
+  color: #787c99;
+  font-family: 'SF Mono', 'Monaco', 'Menlo', 'Courier New', monospace;
+  font-size: 0.8rem;
+  letter-spacing: 0.5px;
+}
+
+.terminal-history-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.terminal-history-actions button {
+  background: transparent;
+  border: 1px solid #3d3f58;
+  color: #787c99;
+  padding: 0.25rem 0.6rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.78rem;
+  transition: all 0.2s;
+}
+
+.terminal-history-actions button:hover {
+  background: #2a2b3d;
+  color: #c0caf5;
+  border-color: #565f89;
+}
+
+.terminal-history-body {
+  padding: 0;
+  max-height: 600px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #3d3f58 #1a1b26;
+}
+
+.terminal-history-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.terminal-history-body::-webkit-scrollbar-track {
+  background: #1a1b26;
+}
+
+.terminal-history-body::-webkit-scrollbar-thumb {
+  background: #3d3f58;
+  border-radius: 3px;
+}
+
+.terminal-entry {
+  padding: 0.8rem 1rem;
+  border-bottom: 1px solid #1e1f33;
+  font-family: 'SF Mono', 'Monaco', 'Menlo', 'Courier New', monospace;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+.terminal-entry:last-child {
+  border-bottom: none;
+}
+
+.terminal-entry-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.3rem;
+  font-size: 0.75rem;
+  color: #565f89;
+  user-select: none;
+}
+
+.terminal-entry-meta .pill {
+  font-size: 0.7rem;
+  padding: 0.1rem 0.5rem;
+}
+
+.terminal-prompt {
+  color: #7aa2f7;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.terminal-prompt::before {
+  content: '$ ';
+  color: #9ece6a;
+  font-weight: bold;
+}
+
+.terminal-stdout {
+  color: #c0caf5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  padding: 0.3rem 0 0 1.2rem;
+}
+
+.terminal-stderr {
+  color: #f7768e;
+  white-space: pre-wrap;
+  word-break: break-all;
+  padding: 0.3rem 0 0 1.2rem;
+}
+
+.terminal-stderr::before {
+  content: 'stderr: ';
+  color: #bb9af7;
+  font-weight: 600;
+}
+
+.terminal-empty {
+  color: #565f89;
+  padding: 2rem 1rem;
+  text-align: center;
+  font-style: italic;
+}
+
+/* Bulk operations unified table */
+.bulk-results-table th,
+.bulk-results-table td {
+  font-size: 0.88rem;
+}
+
+.bulk-results-table code {
+  background: #f0f2f8;
+  padding: 0.15rem 0.4rem;
+  border-radius: 3px;
+  font-size: 0.82rem;
+  word-break: break-all;
+}
+
+.bulk-results-table .output-preview {
+  max-width: 250px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

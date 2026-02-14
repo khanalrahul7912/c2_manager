@@ -39,13 +39,10 @@
   <form method="post">
     {{ form.hidden_tag() }}
     <label>{{ form.command.label }}
-      {{ form.command(rows=6, placeholder='whoami\nls -la\npwd', class_='command-input') }}
+      {{ form.command(rows=4, placeholder='whoami', class_='command-input') }}
     </label>
     {{ form.submit(class_='btn') }}
   </form>
-  <p style="margin-top: 0.5rem; color: #666; font-size: 0.9rem;">
-    💡 Tip: Enter commands as you would in a terminal. Output will appear below.
-  </p>
 </section>
 {% else %}
 <section class="card" style="margin-top: 1rem;">
@@ -56,40 +53,13 @@
 
 <section class="card" style="margin-top: 1rem;">
   <h3>Command History</h3>
-  
-  {% for exec in executions %}
-  <div class="execution">
-    <header>
-      <span class="pill {{ exec.status }}">{{ exec.status }}</span>
-      <span>{{ exec.started_at.strftime('%Y-%m-%d %H:%M:%S') }}</span>
-      <span>by {{ exec.user.username }}</span>
-      {% if exec.completed_at %}
-      <span>({{ ((exec.completed_at - exec.started_at).total_seconds()) | round(2) }}s)</span>
-      {% endif %}
-    </header>
-    <div style="margin-top: 0.5rem;">
-      <strong>Command:</strong>
-      <pre style="margin-top: 0.3rem;">{{ exec.command }}</pre>
-    </div>
-    {% if exec.output %}
-    <div style="margin-top: 0.5rem;">
-      <strong>Output:</strong>
-      <pre style="margin-top: 0.3rem;">{{ exec.output }}</pre>
-    </div>
-    {% endif %}
-  </div>
-  {% else %}
-  <p>No command history yet.</p>
-  {% endfor %}
-
-  <div class="pagination-row">
-    {% if executions_pagination.has_prev %}
-    <a class="btn ghost" href="{{ url_for('main.shell_detail', shell_id=shell.id, page=executions_pagination.prev_num) }}">Prev</a>
-    {% endif %}
-    <span>Page {{ executions_pagination.page }} / {{ executions_pagination.pages or 1 }}</span>
-    {% if executions_pagination.has_next %}
-    <a class="btn ghost" href="{{ url_for('main.shell_detail', shell_id=shell.id, page=executions_pagination.next_num) }}">Next</a>
-    {% endif %}
-  </div>
+  {% with terminal_title=shell.hostname or shell.name ~ ' (' ~ shell.address ~ ')',
+          shell_type='reverse',
+          pagination=executions_pagination,
+          detail_url='main.shell_detail',
+          detail_id_name='shell_id',
+          detail_id_value=shell.id %}
+    {% include 'components/terminal_history.html' %}
+  {% endwith %}
 </section>
 {% endblock %}

@@ -30,6 +30,7 @@ main_bp = Blueprint("main", __name__)
 
 
 PAGE_SIZE_DEFAULT = 15
+LIVENESS_CHECK_COMMAND = "echo test"
 
 
 def _page_arg(name: str = "page") -> int:
@@ -84,6 +85,14 @@ def logout():
 @main_bp.route("/")
 @login_required
 def dashboard():
+    """Legacy SSH dashboard - redirect to unified dashboard."""
+    return redirect(url_for("main.unified_dashboard", view="ssh"))
+
+
+@main_bp.route("/hosts")
+@login_required
+def hosts_dashboard():
+    """SSH Hosts dashboard (legacy)."""
     group = request.args.get("group", "").strip()
     host_page = _page_arg("host_page")
     run_page = _page_arg("run_page")
@@ -107,6 +116,7 @@ def dashboard():
         groups=sorted(groups),
         selected_group=group,
     )
+
 
 
 def _validate_host_form(form: HostForm) -> bool:
@@ -1038,3 +1048,354 @@ def export_commands(format: str):
         fieldnames = ['id', 'shell_name', 'shell_address', 'group_name', 'user', 'command', 'status',
                      'output', 'stdout', 'stderr', 'exit_code', 'started_at', 'completed_at', 'execution_time']
         return ExportHelper.to_csv_response(commands_data, 'shell_commands.csv', fieldnames)
+
+
+@main_bp.route("/control-panel")
+@login_required
+def unified_dashboard():
+    """Unified dashboard for both SSH hosts and reverse shells."""
+    view_type = request.args.get("view", "ssh").strip()
+    
+    # SSH Hosts data
+    ssh_group = request.args.get("group", "").strip()
+    ssh_page = _page_arg("page")
+    
+    ssh_query = Host.query.order_by(Host.name.asc())
+    if ssh_group:
+        ssh_query = ssh_query.filter(Host.group_name == ssh_group)
+    
+    ssh_pagination = ssh_query.paginate(page=ssh_page, per_page=PAGE_SIZE_DEFAULT, error_out=False)
+    ssh_groups = sorted([g[0] for g in db.session.query(Host.group_name).distinct().all() if g[0]])
+    ssh_total = Host.query.count()
+    ssh_active = Host.query.filter_by(is_active=True).count()
+    ssh_recent_commands = CommandExecution.query.count()
+    
+    # Reverse Shells data
+    shell_group_filter = request.args.get("shell_group", "").strip()
+    platform_filter = request.args.get("platform", "").strip()
+    status_filter = request.args.get("status", "").strip()
+    search_query = request.args.get("search", "").strip()
+    shell_page = _page_arg("shell_page")
+    
+    shell_query = ReverseShell.query
+    
+    if shell_group_filter:
+        shell_query = shell_query.filter(ReverseShell.group_name == shell_group_filter)
+    
+    if platform_filter:
+        shell_query = shell_query.filter(ReverseShell.platform == platform_filter)
+    
+    if search_query:
+        search_pattern = f'%{search_query}%'
+        shell_query = shell_query.filter(
+            db.or_(
+                ReverseShell.address.like(search_pattern),
+                ReverseShell.hostname.like(search_pattern),
+                ReverseShell.shell_user.like(search_pattern),
+                ReverseShell.name.like(search_pattern)
+            )
+        )
+    
+    listener = get_listener(current_app._get_current_object())
+    active_shell_ids = set(listener.get_active_shells())
+    
+    shell_query = shell_query.order_by(ReverseShell.last_seen.desc().nullslast(), ReverseShell.name.asc())
+    
+    all_shells = shell_query.all()
+    
+    if status_filter == "active":
+        filtered_shells = [s for s in all_shells if s.id in active_shell_ids]
+    elif status_filter == "disconnected":
+        filtered_shells = [s for s in all_shells if s.id not in active_shell_ids]
+    else:
+        filtered_shells = all_shells
+    
+    # Manual pagination for shells
+    total_shells_count = len(filtered_shells)
+    shells_per_page = PAGE_SIZE_DEFAULT
+    total_shell_pages = max(1, (total_shells_count + shells_per_page - 1) // shells_per_page)
+    shell_page = min(shell_page, total_shell_pages)
+    start_idx = (shell_page - 1) * shells_per_page
+    end_idx = start_idx + shells_per_page
+    paginated_shells = filtered_shells[start_idx:end_idx]
+    
+    # Create pagination object for shells
+    class SimplePagination:
+        def __init__(self, page, total_pages, has_prev, has_next):
+            self.page = page
+            self.pages = total_pages
+            self.has_prev = has_prev
+            self.has_next = has_next
+            self.prev_num = page - 1 if has_prev else page
+            self.next_num = page + 1 if has_next else page
+    
+    shells_pagination = SimplePagination(
+        shell_page,
+        total_shell_pages,
+        shell_page > 1,
+        shell_page < total_shell_pages
+    )
+    
+    shells_groups = sorted([g[0] for g in db.session.query(ReverseShell.group_name).distinct().all() if g[0]])
+    shells_platforms = sorted([p[0] for p in db.session.query(ReverseShell.platform).distinct().all() if p[0]])
+    shells_total = ReverseShell.query.count()
+    shells_connected = len(active_shell_ids)
+    shells_disconnected = shells_total - shells_connected
+    
+    return render_template(
+        "unified_dashboard.html",
+        view_type=view_type,
+        # SSH data
+        ssh_hosts=ssh_pagination.items,
+        ssh_pagination=ssh_pagination,
+        ssh_groups=ssh_groups,
+        selected_ssh_group=ssh_group,
+        ssh_total=ssh_total,
+        ssh_active=ssh_active,
+        ssh_recent_commands=ssh_recent_commands,
+        # Shells data
+        shells=paginated_shells,
+        shells_pagination=shells_pagination,
+        shells_groups=shells_groups,
+        shells_platforms=shells_platforms,
+        selected_shell_group=shell_group_filter,
+        selected_platform=platform_filter,
+        selected_status=status_filter,
+        selected_search=search_query,
+        active_shell_ids=active_shell_ids,
+        shells_total=shells_total,
+        shells_connected=shells_connected,
+        shells_disconnected=shells_disconnected,
+    )
+
+
+# API Endpoints for Bulk Operations
+
+@main_bp.route("/api/bulk-check-liveness", methods=["POST"])
+@login_required
+def bulk_check_liveness():
+    """Check liveness of multiple SSH hosts."""
+    data = request.get_json()
+    ids = data.get("ids", [])
+    
+    if not ids:
+        return jsonify({"error": "No IDs provided"}), 400
+    
+    hosts = Host.query.filter(Host.id.in_(ids)).all()
+    online = 0
+    offline = 0
+    
+    for host in hosts:
+        try:
+            endpoint = SSHEndpoint(
+                address=host.address,
+                port=host.port,
+                username=host.username,
+                auth_mode=host.auth_mode,
+                key_path=host.key_path,
+                password=decrypt_secret(host.password_encrypted) if host.password_encrypted else None,
+                strict_host_key=host.strict_host_key,
+                use_jump_host=host.use_jump_host,
+                jump_address=host.jump_address,
+                jump_port=host.jump_port,
+                jump_username=host.jump_username,
+                jump_auth_mode=host.jump_auth_mode,
+                jump_key_path=host.jump_key_path,
+                jump_password=decrypt_secret(host.jump_password_encrypted) if host.jump_password_encrypted else None,
+            )
+            # Try a simple test command
+            success, _, _ = run_ssh_command(endpoint, LIVENESS_CHECK_COMMAND, timeout=5)
+            if success:
+                online += 1
+                host.is_active = True
+            else:
+                offline += 1
+                host.is_active = False
+        except Exception:
+            offline += 1
+            host.is_active = False
+    
+    db.session.commit()
+    
+    return jsonify({"online": online, "offline": offline})
+
+
+@main_bp.route("/api/bulk-check-shell-liveness", methods=["POST"])
+@login_required
+def bulk_check_shell_liveness():
+    """Check liveness of multiple reverse shells."""
+    data = request.get_json()
+    ids = data.get("ids", [])
+    
+    if not ids:
+        return jsonify({"error": "No IDs provided"}), 400
+    
+    listener = get_listener(current_app._get_current_object())
+    active_shell_ids = set(listener.get_active_shells())
+    
+    shells = ReverseShell.query.filter(ReverseShell.id.in_(ids)).all()
+    online = 0
+    offline = 0
+    
+    for shell in shells:
+        if shell.id in active_shell_ids:
+            # Try sending a simple command to verify
+            success, output = listener.execute_command(shell.id, LIVENESS_CHECK_COMMAND, timeout=5)
+            if success and "test" in output.lower():
+                online += 1
+                shell.status = "connected"
+                shell.last_seen = datetime.utcnow()
+            else:
+                offline += 1
+                shell.status = "disconnected"
+        else:
+            offline += 1
+            shell.status = "disconnected"
+    
+    db.session.commit()
+    
+    return jsonify({"online": online, "offline": offline})
+
+
+@main_bp.route("/api/bulk-change-group", methods=["POST"])
+@login_required
+@role_required("admin")
+def bulk_change_group():
+    """Change group for multiple SSH hosts."""
+    data = request.get_json()
+    ids = data.get("ids", [])
+    new_group = data.get("group", "").strip()
+    
+    if not ids or not new_group:
+        return jsonify({"error": "IDs and group name required"}), 400
+    
+    hosts = Host.query.filter(Host.id.in_(ids)).all()
+    for host in hosts:
+        host.group_name = new_group
+    
+    db.session.commit()
+    
+    return jsonify({"updated": len(hosts), "group": new_group})
+
+
+@main_bp.route("/api/bulk-change-shell-group", methods=["POST"])
+@login_required
+@role_required("admin")
+def bulk_change_shell_group():
+    """Change group for multiple reverse shells."""
+    data = request.get_json()
+    ids = data.get("ids", [])
+    new_group = data.get("group", "").strip()
+    
+    if not ids or not new_group:
+        return jsonify({"error": "IDs and group name required"}), 400
+    
+    shells = ReverseShell.query.filter(ReverseShell.id.in_(ids)).all()
+    for shell in shells:
+        shell.group_name = new_group
+    
+    db.session.commit()
+    
+    return jsonify({"updated": len(shells), "group": new_group})
+
+
+@main_bp.route("/api/bulk-rename", methods=["POST"])
+@login_required
+@role_required("admin")
+def bulk_rename():
+    """Rename multiple SSH hosts using a pattern."""
+    data = request.get_json()
+    ids = data.get("ids", [])
+    pattern = data.get("pattern", "").strip()
+    
+    if not ids or not pattern:
+        return jsonify({"error": "IDs and pattern required"}), 400
+    
+    hosts = Host.query.filter(Host.id.in_(ids)).all()
+    
+    for index, host in enumerate(hosts, start=1):
+        # Replace variables in pattern
+        new_name = pattern
+        new_name = new_name.replace("{name}", host.name)
+        new_name = new_name.replace("{ip}", host.address)
+        new_name = new_name.replace("{index}", str(index))
+        new_name = new_name.replace("{group}", host.group_name)
+        
+        host.name = new_name
+    
+    db.session.commit()
+    
+    return jsonify({"updated": len(hosts)})
+
+
+@main_bp.route("/api/bulk-rename-shells", methods=["POST"])
+@login_required
+@role_required("admin")
+def bulk_rename_shells():
+    """Rename multiple reverse shells using a pattern."""
+    data = request.get_json()
+    ids = data.get("ids", [])
+    pattern = data.get("pattern", "").strip()
+    
+    if not ids or not pattern:
+        return jsonify({"error": "IDs and pattern required"}), 400
+    
+    shells = ReverseShell.query.filter(ReverseShell.id.in_(ids)).all()
+    
+    for index, shell in enumerate(shells, start=1):
+        # Replace variables in pattern
+        new_name = pattern
+        new_name = new_name.replace("{hostname}", shell.hostname or shell.name)
+        new_name = new_name.replace("{ip}", shell.address)
+        new_name = new_name.replace("{index}", str(index))
+        new_name = new_name.replace("{group}", shell.group_name)
+        new_name = new_name.replace("{platform}", shell.platform or "unknown")
+        new_name = new_name.replace("{user}", shell.shell_user or "unknown")
+        
+        shell.name = new_name
+    
+    db.session.commit()
+    
+    return jsonify({"updated": len(shells)})
+
+
+@main_bp.route("/api/bulk-delete", methods=["POST"])
+@login_required
+@role_required("admin")
+def bulk_delete():
+    """Delete multiple SSH hosts."""
+    data = request.get_json()
+    ids = data.get("ids", [])
+    
+    if not ids:
+        return jsonify({"error": "No IDs provided"}), 400
+    
+    # Delete associated command executions first
+    CommandExecution.query.filter(CommandExecution.host_id.in_(ids)).delete(synchronize_session=False)
+    
+    # Delete hosts
+    deleted = Host.query.filter(Host.id.in_(ids)).delete(synchronize_session=False)
+    db.session.commit()
+    
+    return jsonify({"deleted": deleted})
+
+
+@main_bp.route("/api/bulk-delete-shells", methods=["POST"])
+@login_required
+@role_required("admin")
+def bulk_delete_shells():
+    """Delete multiple reverse shells."""
+    data = request.get_json()
+    ids = data.get("ids", [])
+    
+    if not ids:
+        return jsonify({"error": "No IDs provided"}), 400
+    
+    # Delete associated shell executions first
+    ShellExecution.query.filter(ShellExecution.shell_id.in_(ids)).delete(synchronize_session=False)
+    
+    # Delete shells
+    deleted = ReverseShell.query.filter(ReverseShell.id.in_(ids)).delete(synchronize_session=False)
+    db.session.commit()
+    
+    return jsonify({"deleted": deleted})

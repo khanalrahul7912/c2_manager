@@ -1,0 +1,606 @@
+{% extends 'base.html' %}
+{% block title %}Control Panel{% endblock %}
+{% block content %}
+
+<style>
+/* Tab styling */
+.tabs-container {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  margin-bottom: 1.5rem;
+}
+
+.tabs {
+  display: flex;
+  border-bottom: 2px solid #e0e0e0;
+  background: #f5f5f5;
+  border-radius: 8px 8px 0 0;
+  overflow: hidden;
+}
+
+.tab {
+  flex: 1;
+  padding: 1rem 1.5rem;
+  background: #f5f5f5;
+  border: none;
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: 500;
+  transition: all 0.3s ease;
+  position: relative;
+  text-align: center;
+}
+
+.tab:hover {
+  background: #e8e8e8;
+}
+
+.tab.active {
+  background: white;
+  color: #2196F3;
+  border-bottom: 3px solid #2196F3;
+}
+
+.tab-content {
+  display: none;
+  padding: 1.5rem;
+}
+
+.tab-content.active {
+  display: block;
+}
+
+/* Statistics cards */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.stat-card {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 1.5rem;
+  border-radius: 8px;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+
+.stat-card.success {
+  background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+}
+
+.stat-card.warning {
+  background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+}
+
+.stat-card.info {
+  background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+}
+
+.stat-value {
+  font-size: 2rem;
+  font-weight: bold;
+  margin: 0.5rem 0;
+}
+
+.stat-label {
+  font-size: 0.9rem;
+  opacity: 0.9;
+}
+
+/* Checkbox for selection */
+.select-checkbox {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+
+/* Bulk action bar */
+.bulk-action-bar {
+  display: none;
+  background: #e3f2fd;
+  border: 2px solid #2196F3;
+  border-radius: 8px;
+  padding: 1rem 1.5rem;
+  margin-bottom: 1rem;
+  align-items: center;
+  gap: 1rem;
+}
+
+.bulk-action-bar.active {
+  display: flex;
+}
+
+.bulk-action-bar .selected-count {
+  font-weight: bold;
+  color: #1976D2;
+}
+
+.bulk-action-buttons {
+  display: flex;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+</style>
+
+<div class="tabs-container">
+  <div class="tabs">
+    <button class="tab {% if view_type == 'ssh' %}active{% endif %}" onclick="switchTab('ssh')">
+      🖥️ SSH Hosts ({{ ssh_total }})
+    </button>
+    <button class="tab {% if view_type == 'shells' %}active{% endif %}" onclick="switchTab('shells')">
+      🔌 Reverse Shells ({{ shells_total }})
+    </button>
+  </div>
+
+  <!-- SSH Hosts Tab -->
+  <div id="ssh-tab" class="tab-content {% if view_type == 'ssh' %}active{% endif %}">
+    <!-- Statistics -->
+    <div class="stats-grid">
+      <div class="stat-card info">
+        <div class="stat-label">Total Hosts</div>
+        <div class="stat-value">{{ ssh_total }}</div>
+      </div>
+      <div class="stat-card success">
+        <div class="stat-label">Active Hosts</div>
+        <div class="stat-value">{{ ssh_active }}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Groups</div>
+        <div class="stat-value">{{ ssh_groups|length }}</div>
+      </div>
+      <div class="stat-card warning">
+        <div class="stat-label">Recent Commands</div>
+        <div class="stat-value">{{ ssh_recent_commands }}</div>
+      </div>
+    </div>
+
+    <!-- Bulk Action Bar for SSH -->
+    <div id="ssh-bulk-bar" class="bulk-action-bar">
+      <span class="selected-count"><span id="ssh-selected-count">0</span> selected</span>
+      <div class="bulk-action-buttons">
+        <button class="btn" onclick="bulkCheckLiveness('ssh')">✓ Check Liveness</button>
+        <button class="btn" onclick="bulkChangeGroup('ssh')">📁 Change Group</button>
+        <button class="btn" onclick="bulkRename('ssh')">✏️ Rename</button>
+        <button class="btn ghost" onclick="bulkDelete('ssh')" style="background: #f44336; color: white;">🗑️ Delete</button>
+        <button class="btn ghost" onclick="clearSelection('ssh')">✖ Clear</button>
+      </div>
+    </div>
+
+    <div class="card-header">
+      <h2>SSH Hosts</h2>
+      <div class="toolbar">
+        {% if current_user.role == 'admin' %}
+        <a class="btn" href="{{ url_for('main.create_host') }}">➕ Add Host</a>
+        {% endif %}
+        <a class="btn ghost" href="{{ url_for('main.bulk_operations') }}">⚡ Bulk Command</a>
+        <button class="btn ghost" onclick="selectAll('ssh')">☑️ Select All</button>
+      </div>
+    </div>
+
+    <!-- Filter form -->
+    <form method="get" class="inline-form" style="margin-bottom: 1rem;">
+      <input type="hidden" name="view" value="ssh">
+      <label>Filter by group
+        <select name="group" onchange="this.form.submit()">
+          <option value="">All groups</option>
+          {% for group in ssh_groups %}
+            <option value="{{ group }}" {% if selected_ssh_group == group %}selected{% endif %}>{{ group }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </form>
+
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 40px;"><input type="checkbox" class="select-checkbox" id="ssh-select-all" onclick="toggleAll('ssh', this.checked)"></th>
+          <th>Name</th>
+          <th>Group</th>
+          <th>Endpoint</th>
+          <th>Auth</th>
+          <th>Jump</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for host in ssh_hosts %}
+        <tr>
+          <td><input type="checkbox" class="select-checkbox ssh-item-checkbox" data-id="{{ host.id }}" onchange="updateBulkBar('ssh')"></td>
+          <td><strong>{{ host.name }}</strong></td>
+          <td>{{ host.group_name }}</td>
+          <td><code>{{ host.username }}@{{ host.address }}:{{ host.port }}</code></td>
+          <td>{{ host.auth_mode }}</td>
+          <td>{{ 'yes' if host.use_jump_host else 'no' }}</td>
+          <td><span class="pill {{ 'success' if host.is_active else 'failed' }}">{{ 'active' if host.is_active else 'disabled' }}</span></td>
+          <td>
+            <a href="{{ url_for('main.host_detail', host_id=host.id) }}" class="btn ghost" style="padding: 0.3rem 0.6rem;">Open</a>
+            {% if current_user.role == 'admin' %}
+            <a href="{{ url_for('main.edit_host', host_id=host.id) }}" class="btn ghost" style="padding: 0.3rem 0.6rem;">Edit</a>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8">No hosts configured.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <!-- Pagination for SSH -->
+    <div class="pagination-row">
+      {% if ssh_pagination.has_prev %}
+      <a class="btn ghost" href="{{ url_for('main.unified_dashboard', view='ssh', group=selected_ssh_group, page=ssh_pagination.prev_num) }}">Prev</a>
+      {% endif %}
+      <span>Page {{ ssh_pagination.page }} / {{ ssh_pagination.pages or 1 }}</span>
+      {% if ssh_pagination.has_next %}
+      <a class="btn ghost" href="{{ url_for('main.unified_dashboard', view='ssh', group=selected_ssh_group, page=ssh_pagination.next_num) }}">Next</a>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Reverse Shells Tab -->
+  <div id="shells-tab" class="tab-content {% if view_type == 'shells' %}active{% endif %}">
+    <!-- Statistics -->
+    <div class="stats-grid">
+      <div class="stat-card info">
+        <div class="stat-label">Total Shells</div>
+        <div class="stat-value">{{ shells_total }}</div>
+      </div>
+      <div class="stat-card success">
+        <div class="stat-label">Connected</div>
+        <div class="stat-value">{{ shells_connected }}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Platforms</div>
+        <div class="stat-value">{{ shells_platforms|length }}</div>
+      </div>
+      <div class="stat-card warning">
+        <div class="stat-label">Disconnected</div>
+        <div class="stat-value">{{ shells_disconnected }}</div>
+      </div>
+    </div>
+
+    <!-- Bulk Action Bar for Shells -->
+    <div id="shells-bulk-bar" class="bulk-action-bar">
+      <span class="selected-count"><span id="shells-selected-count">0</span> selected</span>
+      <div class="bulk-action-buttons">
+        <button class="btn" onclick="bulkCheckLiveness('shells')">✓ Check Liveness</button>
+        <button class="btn" onclick="bulkChangeGroup('shells')">📁 Change Group</button>
+        <button class="btn" onclick="bulkRename('shells')">✏️ Rename</button>
+        <button class="btn ghost" onclick="bulkDelete('shells')" style="background: #f44336; color: white;">🗑️ Delete</button>
+        <button class="btn ghost" onclick="clearSelection('shells')">✖ Clear</button>
+      </div>
+    </div>
+
+    <div class="card-header">
+      <h2>Reverse Shells</h2>
+      <div class="toolbar">
+        <button id="refresh-btn" class="btn ghost" onclick="location.reload()">🔄 Refresh</button>
+        <button id="auto-refresh-toggle" class="btn ghost" data-enabled="false" onclick="toggleAutoRefresh()">⏰ Auto-Refresh: OFF</button>
+        <a class="btn ghost" href="{{ url_for('main.bulk_shell_operations') }}">⚡ Bulk Command</a>
+        <button class="btn ghost" onclick="selectAll('shells')">☑️ Select All</button>
+      </div>
+    </div>
+
+    <!-- Filters -->
+    <div style="background: #f5f5f5; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
+      <form method="GET" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.5rem; align-items: end;">
+        <input type="hidden" name="view" value="shells">
+        <div>
+          <label style="display: block; margin-bottom: 0.25rem; font-size: 0.9em; font-weight: 500;">Group</label>
+          <select name="shell_group" class="form-control" style="width: 100%; padding: 0.4rem;">
+            <option value="">All Groups</option>
+            {% for group in shells_groups %}
+            <option value="{{ group }}" {% if selected_shell_group == group %}selected{% endif %}>{{ group }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        
+        <div>
+          <label style="display: block; margin-bottom: 0.25rem; font-size: 0.9em; font-weight: 500;">Platform</label>
+          <select name="platform" class="form-control" style="width: 100%; padding: 0.4rem;">
+            <option value="">All Platforms</option>
+            {% for platform in shells_platforms %}
+            <option value="{{ platform }}" {% if selected_platform == platform %}selected{% endif %}>{{ platform }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        
+        <div>
+          <label style="display: block; margin-bottom: 0.25rem; font-size: 0.9em; font-weight: 500;">Status</label>
+          <select name="status" class="form-control" style="width: 100%; padding: 0.4rem;">
+            <option value="">All Status</option>
+            <option value="active" {% if selected_status == 'active' %}selected{% endif %}>Online</option>
+            <option value="disconnected" {% if selected_status == 'disconnected' %}selected{% endif %}>Offline</option>
+          </select>
+        </div>
+        
+        <div>
+          <label style="display: block; margin-bottom: 0.25rem; font-size: 0.9em; font-weight: 500;">Search</label>
+          <input type="text" name="search" class="form-control" style="width: 100%; padding: 0.4rem;"
+                 placeholder="IP, hostname..." value="{{ selected_search }}">
+        </div>
+        
+        <div style="display: flex; gap: 0.5rem;">
+          <button type="submit" class="btn" style="padding: 0.4rem 1rem; flex: 1;">🔍 Filter</button>
+          <a href="{{ url_for('main.unified_dashboard', view='shells') }}" class="btn ghost" style="padding: 0.4rem 1rem; flex: 1;">✖ Clear</a>
+        </div>
+      </form>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 40px;"><input type="checkbox" class="select-checkbox" id="shells-select-all" onclick="toggleAll('shells', this.checked)"></th>
+          <th>Status</th>
+          <th>Name</th>
+          <th>Address</th>
+          <th>Group</th>
+          <th>Platform</th>
+          <th>Hostname</th>
+          <th>Last Seen</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for shell in shells %}
+        <tr>
+          <td><input type="checkbox" class="select-checkbox shells-item-checkbox" data-id="{{ shell.id }}" onchange="updateBulkBar('shells')"></td>
+          <td>
+            {% if shell.id in active_shell_ids %}
+            <span class="pill success">● Connected</span>
+            {% else %}
+            <span class="pill failed">○ Disconnected</span>
+            {% endif %}
+          </td>
+          <td><strong>{{ shell.name }}</strong></td>
+          <td><code>{{ shell.address }}:{{ shell.port }}</code></td>
+          <td>{{ shell.group_name }}</td>
+          <td>{{ shell.platform or 'Unknown' }}</td>
+          <td>{{ shell.hostname or '-' }}</td>
+          <td>
+            {% if shell.last_seen %}
+            {{ shell.last_seen.strftime('%Y-%m-%d %H:%M:%S') }}
+            {% else %}
+            Never
+            {% endif %}
+          </td>
+          <td>
+            <a href="{{ url_for('main.shell_detail', shell_id=shell.id) }}" class="btn ghost" style="padding: 0.3rem 0.6rem;">
+              {% if shell.id in active_shell_ids %}Interact{% else %}View{% endif %}
+            </a>
+            {% if current_user.role == 'admin' %}
+            <a href="{{ url_for('main.edit_shell', shell_id=shell.id) }}" class="btn ghost" style="padding: 0.3rem 0.6rem;">Edit</a>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9">No reverse shells found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <!-- Pagination for Shells -->
+    <div class="pagination-row">
+      {% if shells_pagination.has_prev %}
+      <a class="btn ghost" href="{{ url_for('main.unified_dashboard', view='shells', shell_group=selected_shell_group, platform=selected_platform, status=selected_status, search=selected_search, shell_page=shells_pagination.prev_num) }}">Prev</a>
+      {% endif %}
+      <span>Page {{ shells_pagination.page }} / {{ shells_pagination.pages or 1 }}</span>
+      {% if shells_pagination.has_next %}
+      <a class="btn ghost" href="{{ url_for('main.unified_dashboard', view='shells', shell_group=selected_shell_group, platform=selected_platform, status=selected_status, search=selected_search, shell_page=shells_pagination.next_num) }}">Next</a>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<script>
+// Tab switching
+function switchTab(tabName) {
+  // Update URL to maintain state
+  const url = new URL(window.location);
+  url.searchParams.set('view', tabName);
+  window.history.pushState({}, '', url);
+  
+  // Update tabs
+  document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+  
+  document.querySelector(`button.tab:nth-child(${tabName === 'ssh' ? 1 : 2})`).classList.add('active');
+  document.getElementById(`${tabName}-tab`).classList.add('active');
+}
+
+// Select all items
+function selectAll(type) {
+  document.querySelectorAll(`.${type}-item-checkbox`).forEach(cb => {
+    cb.checked = true;
+  });
+  updateBulkBar(type);
+}
+
+// Toggle all checkboxes
+function toggleAll(type, checked) {
+  document.querySelectorAll(`.${type}-item-checkbox`).forEach(cb => {
+    cb.checked = checked;
+  });
+  updateBulkBar(type);
+}
+
+// Update bulk action bar
+function updateBulkBar(type) {
+  const checkboxes = document.querySelectorAll(`.${type}-item-checkbox:checked`);
+  const count = checkboxes.length;
+  const bar = document.getElementById(`${type}-bulk-bar`);
+  const countSpan = document.getElementById(`${type}-selected-count`);
+  
+  countSpan.textContent = count;
+  
+  if (count > 0) {
+    bar.classList.add('active');
+  } else {
+    bar.classList.remove('active');
+  }
+}
+
+// Clear selection
+function clearSelection(type) {
+  document.querySelectorAll(`.${type}-item-checkbox`).forEach(cb => {
+    cb.checked = false;
+  });
+  document.getElementById(`${type}-select-all`).checked = false;
+  updateBulkBar(type);
+}
+
+// Get selected IDs
+function getSelectedIds(type) {
+  const ids = [];
+  document.querySelectorAll(`.${type}-item-checkbox:checked`).forEach(cb => {
+    ids.push(cb.dataset.id);
+  });
+  return ids;
+}
+
+// Bulk check liveness
+function bulkCheckLiveness(type) {
+  const ids = getSelectedIds(type);
+  if (ids.length === 0) {
+    alert('Please select items to check liveness');
+    return;
+  }
+  
+  const endpoint = type === 'ssh' ? '/api/bulk-check-liveness' : '/api/bulk-check-shell-liveness';
+  
+  fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ ids: ids })
+  })
+  .then(response => response.json())
+  .then(data => {
+    alert(`Liveness check complete!\nOnline: ${data.online}\nOffline: ${data.offline}`);
+    location.reload();
+  })
+  .catch(error => {
+    alert('Error checking liveness: ' + error);
+  });
+}
+
+// Bulk change group
+function bulkChangeGroup(type) {
+  const ids = getSelectedIds(type);
+  if (ids.length === 0) {
+    alert('Please select items to change group');
+    return;
+  }
+  
+  const newGroup = prompt('Enter new group name:');
+  if (!newGroup) return;
+  
+  const endpoint = type === 'ssh' ? '/api/bulk-change-group' : '/api/bulk-change-shell-group';
+  
+  fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ ids: ids, group: newGroup })
+  })
+  .then(response => response.json())
+  .then(data => {
+    alert(`Successfully changed group for ${data.updated} items`);
+    location.reload();
+  })
+  .catch(error => {
+    alert('Error changing group: ' + error);
+  });
+}
+
+// Bulk rename
+function bulkRename(type) {
+  const ids = getSelectedIds(type);
+  if (ids.length === 0) {
+    alert('Please select items to rename');
+    return;
+  }
+  
+  let pattern;
+  if (type === 'ssh') {
+    pattern = prompt('Enter rename pattern:\nAvailable: {name}, {ip}, {index}, {group}\nExample: server-{name}-{index}');
+  } else {
+    pattern = prompt('Enter rename pattern:\nAvailable: {hostname}, {ip}, {index}, {group}, {platform}, {user}\nExample: shell-{hostname}-{platform}-{index}');
+  }
+  if (!pattern) return;
+  
+  const endpoint = type === 'ssh' ? '/api/bulk-rename' : '/api/bulk-rename-shells';
+  
+  fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ ids: ids, pattern: pattern })
+  })
+  .then(response => response.json())
+  .then(data => {
+    alert(`Successfully renamed ${data.updated} items`);
+    location.reload();
+  })
+  .catch(error => {
+    alert('Error renaming: ' + error);
+  });
+}
+
+// Bulk delete
+function bulkDelete(type) {
+  const ids = getSelectedIds(type);
+  if (ids.length === 0) {
+    alert('Please select items to delete');
+    return;
+  }
+  
+  if (!confirm(`Are you sure you want to delete ${ids.length} items? This action cannot be undone.`)) {
+    return;
+  }
+  
+  const endpoint = type === 'ssh' ? '/api/bulk-delete' : '/api/bulk-delete-shells';
+  
+  fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ ids: ids })
+  })
+  .then(response => response.json())
+  .then(data => {
+    alert(`Successfully deleted ${data.deleted} items`);
+    location.reload();
+  })
+  .catch(error => {
+    alert('Error deleting: ' + error);
+  });
+}
+
+// Auto-refresh functionality
+let autoRefreshInterval = null;
+
+function toggleAutoRefresh() {
+  const btn = document.getElementById('auto-refresh-toggle');
+  const enabled = btn.dataset.enabled === 'true';
+  
+  if (enabled) {
+    clearInterval(autoRefreshInterval);
+    btn.dataset.enabled = 'false';
+    btn.innerHTML = '⏰ Auto-Refresh: OFF';
+  } else {
+    autoRefreshInterval = setInterval(() => location.reload(), 5000);
+    btn.dataset.enabled = 'true';
+    btn.innerHTML = '⏰ Auto-Refresh: ON';
+  }
+}
+</script>
+{% endblock %}

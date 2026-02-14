@@ -7,3 +7,5 @@ WTForms==3.1.2
 python-dotenv==1.0.1
 paramiko==3.4.0
 cryptography==43.0.1
+pandas>=2.0.0
+openpyxl>=3.1.0

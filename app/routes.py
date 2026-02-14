@@ -7,6 +7,7 @@ from functools import wraps
 from flask import Blueprint, abort, current_app, flash, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user, login_required, login_user, logout_user
 
+from app.export_utils import ExportHelper
 from app.extensions import db
 from app.forms import (
     BulkCommandForm,
@@ -26,6 +27,7 @@ from app.ssh_service import SSHEndpoint, run_ssh_command
 
 auth_bp = Blueprint("auth", __name__)
 main_bp = Blueprint("main", __name__)
+
 
 
 
@@ -865,3 +867,93 @@ def execute_command_api(session_id: str):
         'execution_time': execution_time,
         'execution_id': execution.id
     })
+
+
+
+# Enhanced Export Routes
+
+@main_bp.route("/export/sessions/<format>")
+@login_required
+def export_sessions(format: str):
+    """
+    Export reverse shell sessions in various formats.
+    Supports: csv, json, xlsx
+    """
+    shells = ReverseShell.query.order_by(ReverseShell.last_seen.desc().nullslast()).all()
+    
+    # Get active shells
+    listener = get_listener(current_app._get_current_object())
+    active_shell_ids = set(listener.get_active_shells())
+    
+    # Prepare data
+    sessions_data = []
+    for shell in shells:
+        sessions_data.append({
+            'id': shell.id,
+            'session_id': shell.session_id or '',
+            'name': shell.name,
+            'address': shell.address,
+            'port': shell.port,
+            'group_name': shell.group_name,
+            'hostname': shell.hostname or '',
+            'platform': shell.platform or '',
+            'shell_user': shell.shell_user or '',
+            'status': 'active' if shell.id in active_shell_ids else 'disconnected',
+            'connected_at': shell.connected_at.strftime('%Y-%m-%d %H:%M:%S') if shell.connected_at else '',
+            'last_seen': shell.last_seen.strftime('%Y-%m-%d %H:%M:%S') if shell.last_seen else '',
+            'disconnected_at': shell.disconnected_at.strftime('%Y-%m-%d %H:%M:%S') if shell.disconnected_at else '',
+            'notes': shell.notes or '',
+        })
+    
+    if format.lower() == 'json':
+        return ExportHelper.to_json_response(sessions_data, 'sessions.json')
+    elif format.lower() in ['xlsx', 'excel']:
+        return ExportHelper.to_excel_response(sessions_data, 'sessions.xlsx', 'Reverse Shell Sessions')
+    else:  # default to CSV
+        fieldnames = ['id', 'session_id', 'name', 'address', 'port', 'group_name', 'hostname', 
+                     'platform', 'shell_user', 'status', 'connected_at', 'last_seen', 'disconnected_at', 'notes']
+        return ExportHelper.to_csv_response(sessions_data, 'sessions.csv', fieldnames)
+
+
+@main_bp.route("/export/commands/<format>")
+@login_required
+def export_commands(format: str):
+    """
+    Export shell command history in various formats.
+    Supports: csv, json, xlsx
+    """
+    executions = ShellExecution.query.order_by(ShellExecution.started_at.desc()).all()
+    
+    # Prepare data
+    commands_data = []
+    for exec in executions:
+        duration = ""
+        if exec.completed_at and exec.started_at:
+            delta = exec.completed_at - exec.started_at
+            duration = str(delta.total_seconds())
+        
+        commands_data.append({
+            'id': exec.id,
+            'shell_name': exec.shell.name,
+            'shell_address': exec.shell.address,
+            'group_name': exec.shell.group_name,
+            'user': exec.user.username,
+            'command': exec.command,
+            'status': exec.status,
+            'output': exec.output or '',
+            'stdout': exec.stdout or '',
+            'stderr': exec.stderr or '',
+            'exit_code': exec.exit_code if exec.exit_code is not None else '',
+            'started_at': exec.started_at.strftime('%Y-%m-%d %H:%M:%S'),
+            'completed_at': exec.completed_at.strftime('%Y-%m-%d %H:%M:%S') if exec.completed_at else '',
+            'execution_time': exec.execution_time if exec.execution_time else duration,
+        })
+    
+    if format.lower() == 'json':
+        return ExportHelper.to_json_response(commands_data, 'shell_commands.json')
+    elif format.lower() in ['xlsx', 'excel']:
+        return ExportHelper.to_excel_response(commands_data, 'shell_commands.xlsx', 'Shell Commands')
+    else:  # default to CSV
+        fieldnames = ['id', 'shell_name', 'shell_address', 'group_name', 'user', 'command', 'status',
+                     'output', 'stdout', 'stderr', 'exit_code', 'started_at', 'completed_at', 'execution_time']
+        return ExportHelper.to_csv_response(commands_data, 'shell_commands.csv', fieldnames)

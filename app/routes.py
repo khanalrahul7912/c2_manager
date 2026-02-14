@@ -974,7 +974,7 @@ def execute_command_api(session_id: str):
     # Execute command and track time
     try:
         start_time = datetime.utcnow()
-        timeout = current_app.config.get('SHELL_COMMAND_TIMEOUT', 30)
+        timeout = current_app.config.get('SHELL_COMMAND_TIMEOUT', 120)
         success, output = listener.execute_command(shell.id, command, timeout=timeout)
         execution_time = (datetime.utcnow() - start_time).total_seconds()
         
@@ -1104,7 +1104,7 @@ def shell_execute_api(shell_id: int):
 
     try:
         start_time = datetime.utcnow()
-        timeout = current_app.config.get("SHELL_COMMAND_TIMEOUT", 30)
+        timeout = current_app.config.get("SHELL_COMMAND_TIMEOUT", 120)
         success, output = listener.execute_command(shell_id, command, timeout=timeout)
         execution_time = (datetime.utcnow() - start_time).total_seconds()
 

@@ -25,13 +25,24 @@ class ShellConnection:
         self.lock = threading.Lock()
         self.is_active = True
         
-    def send_command(self, command: str, timeout: int = 30) -> str:
-        """Send command to shell and receive output."""
+    def send_command(self, command: str, timeout: int = 120) -> str:
+        """Send command to shell and receive output.
+
+        Args:
+            command: The shell command to execute.
+            timeout: Maximum seconds to wait for output (default 120 / 2 min).
+
+        If the command does not finish within *timeout* seconds the
+        connection is considered tainted (e.g. by ``sudo`` waiting for
+        a password or ``ping`` running forever) and the connection is
+        closed so the reverse-shell client can reconnect cleanly.
+        """
+        timed_out = False
         with self.lock:
             try:
                 if not self.is_active:
                     return "Error: Connection is not active"
-                
+
                 # Drain any buffered data (e.g. from keepalive prompts)
                 self.conn.settimeout(0.2)
                 try:
@@ -41,45 +52,51 @@ class ShellConnection:
                             break
                 except (socket.timeout, OSError):
                     pass
-                
+
                 # Send command
                 self.conn.settimeout(timeout)
                 cmd_bytes = (command.strip() + '\n').encode('utf-8')
                 self.conn.sendall(cmd_bytes)
-                
-                # Receive response
+
+                # Receive response with hard deadline
                 output = b""
-                self.conn.settimeout(5)  # Shorter timeout for receiving
-                
-                # Read until we get a delimiter or timeout
-                start_time = time.time()
-                while time.time() - start_time < timeout:
+                deadline = time.time() + timeout
+                idle_timeout = 3  # seconds of silence to consider command done
+                self.conn.settimeout(idle_timeout)
+
+                while True:
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        timed_out = True
+                        break
                     try:
+                        self.conn.settimeout(min(idle_timeout, remaining))
                         chunk = self.conn.recv(4096)
                         if not chunk:
                             break
                         output += chunk
-                        # Simple heuristic: if we get a newline and no data for 0.5s, we're done
-                        if b'\n' in chunk:
-                            time.sleep(0.5)
-                            self.conn.settimeout(0.5)
-                            try:
-                                chunk = self.conn.recv(4096)
-                                if chunk:
-                                    output += chunk
-                                else:
-                                    break
-                            except socket.timeout:
-                                break
                     except socket.timeout:
+                        # No data received within idle_timeout
                         if output:
+                            # Got some output and then silence – command likely finished
                             break
+                        # No output at all yet – keep waiting until deadline
                         continue
-                
-                output = output.decode('utf-8', errors='replace')
-                # Clean ANSI escape codes from output
-                output = clean_shell_output(output)
-                return output
+
+                output_str = output.decode('utf-8', errors='replace')
+                output_str = clean_shell_output(output_str)
+
+                if timed_out:
+                    # Connection is tainted – close it so it can reconnect
+                    self.is_active = False
+                    try:
+                        self.conn.close()
+                    except Exception:
+                        pass
+                    notice = "\n\n⚠️ Command timed out after {}s. Session closed – it will reconnect automatically.".format(timeout)
+                    return output_str + notice
+
+                return output_str
             except Exception as exc:
                 self.is_active = False
                 return f"Error: {exc}"
@@ -399,14 +416,32 @@ class ShellListener:
                 
                 print(f"[-] Shell disconnected: ID {shell_id}")
     
-    def execute_command(self, shell_id: int, command: str, timeout: int = 30) -> tuple[bool, str]:
-        """Execute a command on a connected shell."""
+    def execute_command(self, shell_id: int, command: str, timeout: int = 120) -> tuple[bool, str]:
+        """Execute a command on a connected shell.
+
+        The default timeout is 120 seconds (2 minutes).  If the command
+        exceeds this, the underlying connection is closed so the
+        reverse-shell client can reconnect cleanly.
+        """
         with self.lock:
             conn = self.connections.get(shell_id)
             if not conn or not conn.is_active:
                 return False, "Shell is not connected"
-        
+
         output = conn.send_command(command, timeout)
+
+        # If the connection was closed due to timeout, clean up
+        if not conn.is_active:
+            with self.lock:
+                self.connections.pop(shell_id, None)
+            with self.app.app_context():
+                shell = db.session.get(ReverseShell, shell_id)
+                if shell:
+                    shell.status = "disconnected"
+                    shell.disconnected_at = datetime.utcnow()
+                    db.session.commit()
+            return True, output
+
         return True, output
     
     def get_active_shells(self) -> list[int]:

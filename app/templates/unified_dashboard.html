@@ -407,6 +407,8 @@
 </div>
 
 <script>
+const CSRF_TOKEN = '{{ csrf_token() }}';
+
 // Tab switching
 function switchTab(tabName) {
   // Update URL to maintain state
@@ -486,10 +488,14 @@ function bulkCheckLiveness(type) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'X-CSRFToken': CSRF_TOKEN,
     },
     body: JSON.stringify({ ids: ids })
   })
-  .then(response => response.json())
+  .then(response => {
+    if (!response.ok) throw new Error('Server error: ' + response.status);
+    return response.json();
+  })
   .then(data => {
     alert(`Liveness check complete!\nOnline: ${data.online}\nOffline: ${data.offline}`);
     location.reload();
@@ -516,10 +522,14 @@ function bulkChangeGroup(type) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'X-CSRFToken': CSRF_TOKEN,
     },
     body: JSON.stringify({ ids: ids, group: newGroup })
   })
-  .then(response => response.json())
+  .then(response => {
+    if (!response.ok) throw new Error('Server error: ' + response.status);
+    return response.json();
+  })
   .then(data => {
     alert(`Successfully changed group for ${data.updated} items`);
     location.reload();
@@ -551,10 +561,14 @@ function bulkRename(type) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'X-CSRFToken': CSRF_TOKEN,
     },
     body: JSON.stringify({ ids: ids, pattern: pattern })
   })
-  .then(response => response.json())
+  .then(response => {
+    if (!response.ok) throw new Error('Server error: ' + response.status);
+    return response.json();
+  })
   .then(data => {
     alert(`Successfully renamed ${data.updated} items`);
     location.reload();
@@ -582,10 +596,14 @@ function bulkDelete(type) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'X-CSRFToken': CSRF_TOKEN,
     },
     body: JSON.stringify({ ids: ids })
   })
-  .then(response => response.json())
+  .then(response => {
+    if (!response.ok) throw new Error('Server error: ' + response.status);
+    return response.json();
+  })
   .then(data => {
     alert(`Successfully deleted ${data.deleted} items`);
     location.reload();
@@ -649,10 +667,16 @@ function runOrchestration(type, action) {
 
   fetch(`/api/orchestrate/${action}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-CSRFToken': CSRF_TOKEN,
+    },
     body: JSON.stringify(body)
   })
-  .then(response => response.json())
+  .then(response => {
+    if (!response.ok) throw new Error('Server error: ' + response.status);
+    return response.json();
+  })
   .then(data => {
     if (!data.success) {
       resultsContent.innerHTML = `<p style="color: red;">Error: ${data.error}</p>`;

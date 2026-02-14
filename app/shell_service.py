@@ -119,7 +119,10 @@ class ShellListener:
         try:
             self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.server_socket.bind(('0.0.0.0', self.port))
+            # Bind to all interfaces (0.0.0.0) to accept reverse shell connections
+            # from remote systems. This is intentional for a C2 listener.
+            # In production, use firewall rules to restrict access.
+            self.server_socket.bind(('0.0.0.0', self.port))  # nosec B104
             self.server_socket.listen(50)  # Allow up to 50 queued connections
             self.server_socket.settimeout(1.0)  # Timeout to check is_running periodically
             

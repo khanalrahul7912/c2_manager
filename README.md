@@ -46,6 +46,12 @@ RemoteOps is a Python 3.12 Flask control plane for legitimate remote administrat
 
 > **Security Notice**: Reverse shell functionality should only be used on systems you own or have explicit authorization to access. This tool is designed for legitimate IT operations, infrastructure management, and authorized security testing.
 
+> **Production Security**: The reverse shell listener binds to all interfaces (0.0.0.0) to accept connections from remote systems. In production environments:
+> - Use firewall rules to restrict which IPs can connect to port 5000
+> - Deploy behind a VPN or private network
+> - Enable authentication at the network level
+> - Monitor all connections via the audit logs
+
 ## Required environment variables
 
 - `SECRET_KEY`: Flask session security key.

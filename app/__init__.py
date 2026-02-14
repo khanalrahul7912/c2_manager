@@ -33,9 +33,6 @@ def create_app() -> Flask:
         except Exception as exc:
             print(f"Warning: Failed to start reverse shell listener: {exc}")
 
-    app.register_blueprint(auth_bp)
-    app.register_blueprint(main_bp)
-
     @app.cli.command("create-admin")
     def create_admin() -> None:
         """Create the initial admin account."""

@@ -229,9 +229,9 @@ class ShellListener:
                     def _send_and_recv(cmd_str: str) -> str:
                         """Send a command and receive output."""
                         conn.sendall(cmd_str.encode('utf-8'))
-                        time.sleep(1.0)
+                        time.sleep(0.5)
                         chunks = b""
-                        conn.settimeout(2)
+                        conn.settimeout(1)
                         try:
                             while True:
                                 chunk = conn.recv(4096)

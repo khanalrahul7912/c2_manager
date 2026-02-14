@@ -127,11 +127,11 @@
 
 <div class="tabs-container">
   <div class="tabs">
-    <button class="tab {% if view_type == 'ssh' %}active{% endif %}" onclick="switchTab('ssh')">
-      🖥️ SSH Shell ({{ ssh_total }})
-    </button>
     <button class="tab {% if view_type == 'shells' %}active{% endif %}" onclick="switchTab('shells')">
       🔌 Reverse Shell ({{ shells_total }})
+    </button>
+    <button class="tab {% if view_type == 'ssh' %}active{% endif %}" onclick="switchTab('ssh')">
+      🖥️ SSH Shell ({{ ssh_total }})
     </button>
   </div>
 
@@ -418,7 +418,7 @@ function switchTab(tabName) {
   document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
   document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
   
-  document.querySelector(`button.tab:nth-child(${tabName === 'ssh' ? 1 : 2})`).classList.add('active');
+  document.querySelector(`button.tab:nth-child(${tabName === 'shells' ? 1 : 2})`).classList.add('active');
   document.getElementById(`${tabName}-tab`).classList.add('active');
 }
 

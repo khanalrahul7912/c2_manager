@@ -1698,7 +1698,7 @@ def orchestrate_service_status():
     if service:
         command = f"systemctl status {service} 2>/dev/null || service {service} status 2>/dev/null || sc query {service} 2>nul"
     else:
-        command = "systemctl list-units --type=service --state=running 2>/dev/null || service --status-all 2>/dev/null || sc query state= all 2>nul | head -60"
+        command = "systemctl list-units --type=service --state=running 2>/dev/null | head -60 || service --status-all 2>/dev/null | head -60 || sc query state= all 2>nul"
     timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
 
     if target_type == "ssh":

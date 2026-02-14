@@ -495,31 +495,10 @@ def bulk_operations():
     )
 
 
-@main_bp.route("/hosts/<int:host_id>", methods=["GET", "POST"])
+@main_bp.route("/hosts/<int:host_id>")
 @login_required
 def host_detail(host_id: int):
     host = db.get_or_404(Host, host_id)
-    form = CommandForm()
-
-    if form.validate_on_submit():
-        command = form.command.data.strip()
-        execution = _create_execution(host, command, current_user.id)
-        try:
-            target = _build_target(host)
-            jump_host = _build_jump(host)
-            result = _run_command_for_host(host, command, current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30), target, jump_host)[1]
-            app = current_app._get_current_object()
-            _complete_execution(app, execution.id, result)
-            # Re-query execution to get updated status
-            execution = db.session.get(CommandExecution, execution.id)
-            flash(f"Command completed with status {execution.status}.", "info")
-        except Exception as exc:
-            execution.status = "failed"
-            execution.stderr = f"Error: {exc}"
-            execution.completed_at = datetime.utcnow()
-            db.session.commit()
-            flash(f"Command failed: {exc}", "danger")
-        return redirect(url_for("main.host_detail", host_id=host.id))
 
     page = _page_arg("page")
     executions_pagination = CommandExecution.query.filter_by(host_id=host.id).order_by(
@@ -529,7 +508,6 @@ def host_detail(host_id: int):
     return render_template(
         "host_detail.html",
         host=host,
-        form=form,
         executions=executions_pagination.items,
         executions_pagination=executions_pagination,
     )
@@ -641,67 +619,25 @@ def shells_dashboard():
     )
 
 
-@main_bp.route("/shells/<int:shell_id>", methods=["GET", "POST"])
+@main_bp.route("/shells/<int:shell_id>")
 @login_required
 def shell_detail(shell_id: int):
     """Interactive shell management page."""
     shell = db.get_or_404(ReverseShell, shell_id)
-    form = ShellCommandForm()
-    
+
     # Check if shell is currently connected
     listener = get_listener(current_app._get_current_object())
     is_connected = shell_id in listener.get_active_shells()
-    
-    if form.validate_on_submit() and is_connected:
-        command = form.command.data.strip()
-        
-        # Create execution record
-        execution = ShellExecution(
-            shell_id=shell.id,
-            user_id=current_user.id,
-            command=command,
-            status="running",
-        )
-        db.session.add(execution)
-        db.session.commit()
-        
-        try:
-            # Execute command and track time
-            start_time = datetime.utcnow()
-            success, output = listener.execute_command(shell_id, command, timeout=60)
-            execution_time = (datetime.utcnow() - start_time).total_seconds()
-            
-            # Update execution record
-            execution.output = output
-            execution.stdout = output
-            execution.status = "success" if success else "failed"
-            execution.completed_at = datetime.utcnow()
-            execution.execution_time = execution_time
-            db.session.commit()
-            
-            flash(f"Command executed with status: {execution.status}", "info")
-        except Exception as exc:
-            execution.status = "failed"
-            execution.output = f"Error: {exc}"
-            execution.completed_at = datetime.utcnow()
-            db.session.commit()
-            flash(f"Command failed: {exc}", "danger")
-        
-        return redirect(url_for("main.shell_detail", shell_id=shell.id))
-    elif form.validate_on_submit() and not is_connected:
-        flash("Shell is not connected. Cannot execute commands.", "warning")
-        return redirect(url_for("main.shell_detail", shell_id=shell.id))
-    
+
     # Get command history
     page = _page_arg("page")
     executions_pagination = ShellExecution.query.filter_by(shell_id=shell.id).order_by(
         ShellExecution.started_at.desc()
     ).paginate(page=page, per_page=PAGE_SIZE_DEFAULT, error_out=False)
-    
+
     return render_template(
         "shell_detail.html",
         shell=shell,
-        form=form,
         is_connected=is_connected,
         executions=executions_pagination.items,
         executions_pagination=executions_pagination,
@@ -1069,6 +1005,130 @@ def execute_command_api(session_id: str):
             'error': f"Command execution failed: {exc}",
             'execution_id': execution.id
         }), 500
+
+
+@main_bp.route("/api/ssh-execute/<int:host_id>", methods=["POST"])
+@login_required
+def ssh_execute_api(host_id: int):
+    """Execute a command on an SSH host via JSON API (used by interactive terminal)."""
+    host = db.session.get(Host, host_id)
+    if not host:
+        return jsonify({"success": False, "error": "Host not found"}), 404
+
+    data = request.get_json()
+    if not data or "command" not in data:
+        return jsonify({"success": False, "error": "Missing command"}), 400
+
+    command = data["command"].strip()
+    if not command:
+        return jsonify({"success": False, "error": "Command cannot be empty"}), 400
+
+    execution = _create_execution(host, command, current_user.id)
+    try:
+        target = _build_target(host)
+        jump_host = _build_jump(host)
+        timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
+        start_time = datetime.utcnow()
+        _, result = _run_command_for_host(host, command, timeout, target, jump_host)
+        execution_time = (datetime.utcnow() - start_time).total_seconds()
+
+        execution.stdout = result.stdout
+        execution.stderr = result.stderr
+        execution.return_code = result.return_code
+        execution.status = "success" if result.return_code == 0 else "failed"
+        execution.completed_at = datetime.utcnow()
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "exit_code": result.return_code,
+            "execution_time": execution_time,
+            "execution_id": execution.id,
+        })
+    except Exception as exc:
+        execution.status = "failed"
+        execution.stderr = f"Error: {exc}"
+        execution.completed_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@main_bp.route("/api/shell-status/<int:shell_id>")
+@login_required
+def shell_status_api(shell_id: int):
+    """Check if a reverse shell is currently connected."""
+    shell = db.session.get(ReverseShell, shell_id)
+    if not shell:
+        return jsonify({"error": "Shell not found"}), 404
+    listener = get_listener(current_app._get_current_object())
+    connected = shell_id in listener.get_active_shells()
+    return jsonify({
+        "connected": connected,
+        "shell_id": shell_id,
+        "address": shell.address,
+        "hostname": shell.hostname,
+        "last_seen": shell.last_seen.isoformat() if shell.last_seen else None,
+    })
+
+
+@main_bp.route("/api/shell-execute/<int:shell_id>", methods=["POST"])
+@login_required
+def shell_execute_api(shell_id: int):
+    """Execute a command on a reverse shell via JSON API (used by interactive terminal)."""
+    shell = db.session.get(ReverseShell, shell_id)
+    if not shell:
+        return jsonify({"success": False, "error": "Shell not found"}), 404
+
+    listener = get_listener(current_app._get_current_object())
+    if shell_id not in listener.get_active_shells():
+        return jsonify({"success": False, "error": "Shell is not connected"}), 503
+
+    data = request.get_json()
+    if not data or "command" not in data:
+        return jsonify({"success": False, "error": "Missing command"}), 400
+
+    command = data["command"].strip()
+    if not command:
+        return jsonify({"success": False, "error": "Command cannot be empty"}), 400
+
+    execution = ShellExecution(
+        shell_id=shell.id,
+        user_id=current_user.id,
+        command=command,
+        status="running",
+    )
+    db.session.add(execution)
+    db.session.commit()
+
+    try:
+        start_time = datetime.utcnow()
+        timeout = current_app.config.get("SHELL_COMMAND_TIMEOUT", 30)
+        success, output = listener.execute_command(shell_id, command, timeout=timeout)
+        execution_time = (datetime.utcnow() - start_time).total_seconds()
+
+        execution.output = output
+        execution.stdout = output
+        execution.status = "success" if success else "failed"
+        execution.completed_at = datetime.utcnow()
+        execution.execution_time = execution_time
+        db.session.commit()
+
+        return jsonify({
+            "success": success,
+            "stdout": output if success else "",
+            "stderr": "" if success else output,
+            "exit_code": 0 if success else -1,
+            "execution_time": execution_time,
+            "execution_id": execution.id,
+        })
+    except Exception as exc:
+        execution.status = "failed"
+        execution.output = f"Error: {exc}"
+        execution.completed_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({"success": False, "error": str(exc)}), 500
 
 
 # Enhanced Export Routes

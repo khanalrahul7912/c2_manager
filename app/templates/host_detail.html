@@ -2,26 +2,78 @@
 {% block title %}Host {{ host.name }}{% endblock %}
 {% block content %}
 <section class="card">
-  <h2>{{ host.name }}</h2>
-  <p><strong>Endpoint:</strong> {{ host.username }}@{{ host.address }}:{{ host.port }}</p>
-  <p><strong>Group:</strong> {{ host.group_name }} | <strong>Auth:</strong> {{ host.auth_mode }} | <strong>Strict host key:</strong> {{ 'enabled' if host.strict_host_key else 'disabled' }}</p>
-  <p><strong>Jump host:</strong> {{ host.jump_username }}@{{ host.jump_address }}:{{ host.jump_port }}{% if not host.use_jump_host %} (disabled){% endif %}</p>
-  <form method="post">
-    {{ form.hidden_tag() }}
-    <label>{{ form.command.label }} {{ form.command(rows=4, placeholder='uname -a', class_='command-input') }}</label>
-    {{ form.submit(class_='btn') }}
-  </form>
+  <div class="card-header">
+    <h2>{{ host.name }}</h2>
+    <div class="toolbar">
+      <a href="{{ url_for('main.edit_host', host_id=host.id) }}" class="btn ghost">Edit</a>
+      <a href="{{ url_for('main.unified_dashboard', view='ssh') }}" class="btn ghost">Back to Hosts</a>
+    </div>
+  </div>
+  <div class="host-info-bar">
+    <span class="info-item"><strong>Endpoint:</strong> <code>{{ host.username }}@{{ host.address }}:{{ host.port }}</code></span>
+    <span class="info-item"><strong>Group:</strong> {{ host.group_name }}</span>
+    <span class="info-item"><strong>Auth:</strong> {{ host.auth_mode }}</span>
+    {% if host.use_jump_host %}
+    <span class="info-item"><strong>Jump:</strong> <code>{{ host.jump_username }}@{{ host.jump_address }}:{{ host.jump_port }}</code></span>
+    {% endif %}
+  </div>
 </section>
 
-<section class="card">
-  <h3>Execution History</h3>
-  {% with terminal_title=host.username ~ '@' ~ host.address ~ ':' ~ host.port,
-          shell_type='ssh',
-          pagination=executions_pagination,
-          detail_url='main.host_detail',
-          detail_id_name='host_id',
-          detail_id_value=host.id %}
-    {% include 'components/terminal_history.html' %}
-  {% endwith %}
+{# Interactive terminal #}
+<div class="term-wrap">
+  <div class="term-titlebar">
+    <div class="term-dots"><span class="d-r"></span><span class="d-y"></span><span class="d-g"></span></div>
+    <span class="term-title">{{ host.username }}@{{ host.address }}:{{ host.port }} — SSH</span>
+    <span class="term-status">
+      <span class="term-dot online" id="term-status-dot"></span>
+      <span id="term-status-text">Ready</span>
+    </span>
+    <div class="term-actions">
+      <button type="button" onclick="document.getElementById('term-body').innerHTML=''" title="Clear (Ctrl+L)">🧹 Clear</button>
+      <button type="button" onclick="copyTerminalOutput(this)" title="Copy all output">📋 Copy</button>
+    </div>
+  </div>
+
+  <div class="term-body" id="term-body">
+    {# Render previous command history inline #}
+    {% for run in executions | reverse %}
+    <div><span class="term-prompt-label">{{ host.username }}@{{ host.address }}$</span> <span class="term-cmd">{{ run.command }}</span></div>
+    {% if run.stdout %}<div><span class="term-stdout">{{ run.stdout }}</span></div>{% endif %}
+    {% if run.stderr %}<div><span class="term-stderr">{{ run.stderr }}</span></div>{% endif %}
+    {% endfor %}
+  </div>
+
+  <form class="term-inputbar" id="term-form" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <span class="prompt-label">{{ host.username }}@{{ host.address }}$</span>
+    <input type="text" id="term-input" placeholder="Type a command…" autocomplete="off" autofocus>
+  </form>
+</div>
+
+{% if executions_pagination.pages and executions_pagination.pages > 1 %}
+<section class="card" style="margin-top:1rem;">
+  <h3>Older Command History</h3>
+  <div class="pagination-row">
+    {% if executions_pagination.has_prev %}
+    <a class="btn ghost" href="{{ url_for('main.host_detail', host_id=host.id, page=executions_pagination.prev_num) }}">Prev</a>
+    {% endif %}
+    <span>Page {{ executions_pagination.page }} / {{ executions_pagination.pages }}</span>
+    {% if executions_pagination.has_next %}
+    <a class="btn ghost" href="{{ url_for('main.host_detail', host_id=host.id, page=executions_pagination.next_num) }}">Next</a>
+    {% endif %}
+  </div>
 </section>
+{% endif %}
+
+<script>
+  window.TERMINAL_CONFIG = {
+    executeUrl:  '{{ url_for("main.ssh_execute_api", host_id=host.id) }}',
+    statusUrl:   null,
+    shellType:   'ssh',
+    promptLabel: '{{ host.username }}@{{ host.address }}$',
+    isConnected: true,
+    csrfToken:   '{{ csrf_token() }}',
+  };
+</script>
+<script src="{{ url_for('static', filename='js/terminal.js') }}"></script>
 {% endblock %}

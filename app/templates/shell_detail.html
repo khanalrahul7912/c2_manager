@@ -12,54 +12,78 @@
     </div>
   </div>
 
-  <table>
-    <tr>
-      <th style="width: 200px;">Status</th>
-      <td>
-        {% if is_connected %}
-        <span class="pill success">● Connected</span>
-        {% else %}
-        <span class="pill failed">○ Disconnected</span>
-        {% endif %}
-      </td>
-    </tr>
-    <tr><th>Address</th><td><code>{{ shell.address }}:{{ shell.port }}</code></td></tr>
-    <tr><th>Group</th><td>{{ shell.group_name }}</td></tr>
-    <tr><th>Platform</th><td>{{ shell.platform or 'Unknown' }}</td></tr>
-    <tr><th>Hostname</th><td>{{ shell.hostname or '-' }}</td></tr>
-    <tr><th>Connected At</th><td>{{ shell.connected_at.strftime('%Y-%m-%d %H:%M:%S') if shell.connected_at else 'Never' }}</td></tr>
-    <tr><th>Last Seen</th><td>{{ shell.last_seen.strftime('%Y-%m-%d %H:%M:%S') if shell.last_seen else 'Never' }}</td></tr>
-    <tr><th>Disconnected At</th><td>{{ shell.disconnected_at.strftime('%Y-%m-%d %H:%M:%S') if shell.disconnected_at else '-' }}</td></tr>
-  </table>
+  <div class="host-info-bar">
+    <span class="info-item"><strong>Address:</strong> <code>{{ shell.address }}:{{ shell.port }}</code></span>
+    <span class="info-item"><strong>Group:</strong> {{ shell.group_name }}</span>
+    <span class="info-item"><strong>Platform:</strong> {{ shell.platform or 'Unknown' }}</span>
+    <span class="info-item"><strong>Hostname:</strong> {{ shell.hostname or '-' }}</span>
+  </div>
 </section>
 
-{% if is_connected %}
-<section class="card" style="margin-top: 1rem;">
-  <h3>Execute Command</h3>
-  <form method="post">
-    {{ form.hidden_tag() }}
-    <label>{{ form.command.label }}
-      {{ form.command(rows=4, placeholder='whoami', class_='command-input') }}
-    </label>
-    {{ form.submit(class_='btn') }}
+{# Disconnect warning banner (hidden when connected) #}
+<div class="term-disconnect-banner" id="term-disconnect-banner" {% if is_connected %}style="display:none"{% endif %}>
+  <span class="warn-icon">⚠️</span>
+  <span class="warn-text">
+    <strong>Shell is disconnected</strong>
+    <small>Commands cannot be executed. The terminal will resume automatically when the shell reconnects.</small>
+  </span>
+</div>
+
+{# Interactive terminal #}
+<div class="term-wrap">
+  <div class="term-titlebar">
+    <div class="term-dots"><span class="d-r"></span><span class="d-y"></span><span class="d-g"></span></div>
+    <span class="term-title">{{ shell.shell_user or 'shell' }}@{{ shell.hostname or shell.address }} — Reverse Shell</span>
+    <span class="term-status">
+      <span class="term-dot {% if is_connected %}online{% else %}offline{% endif %}" id="term-status-dot"></span>
+      <span id="term-status-text">{% if is_connected %}Connected{% else %}Disconnected{% endif %}</span>
+    </span>
+    <div class="term-actions">
+      <button type="button" onclick="document.getElementById('term-body').innerHTML=''" title="Clear (Ctrl+L)">🧹 Clear</button>
+      <button type="button" onclick="copyTerminalOutput(this)" title="Copy all output">📋 Copy</button>
+    </div>
+  </div>
+
+  <div class="term-body" id="term-body">
+    {# Render previous command history inline #}
+    {% for run in executions | reverse %}
+    <div><span class="term-prompt-label">{{ shell.shell_user or 'shell' }}@{{ shell.hostname or shell.address }}$</span> <span class="term-cmd">{{ run.command }}</span></div>
+    {% if run.output %}<div><span class="term-stdout">{{ run.output }}</span></div>{% endif %}
+    {% if run.stderr %}<div><span class="term-stderr">{{ run.stderr }}</span></div>{% endif %}
+    {% endfor %}
+  </div>
+
+  <form class="term-inputbar" id="term-form" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <span class="prompt-label">{{ shell.shell_user or 'shell' }}@{{ shell.hostname or shell.address }}$</span>
+    <input type="text" id="term-input" placeholder="Type a command…" {% if not is_connected %}disabled{% endif %} autocomplete="off" autofocus>
   </form>
-</section>
-{% else %}
-<section class="card" style="margin-top: 1rem;">
-  <h3>Shell Offline</h3>
-  <p>This shell is not currently connected. Commands cannot be executed until it reconnects.</p>
+</div>
+
+{% if executions_pagination.pages and executions_pagination.pages > 1 %}
+<section class="card" style="margin-top:1rem;">
+  <h3>Older Command History</h3>
+  <div class="pagination-row">
+    {% if executions_pagination.has_prev %}
+    <a class="btn ghost" href="{{ url_for('main.shell_detail', shell_id=shell.id, page=executions_pagination.prev_num) }}">Prev</a>
+    {% endif %}
+    <span>Page {{ executions_pagination.page }} / {{ executions_pagination.pages }}</span>
+    {% if executions_pagination.has_next %}
+    <a class="btn ghost" href="{{ url_for('main.shell_detail', shell_id=shell.id, page=executions_pagination.next_num) }}">Next</a>
+    {% endif %}
+  </div>
 </section>
 {% endif %}
 
-<section class="card" style="margin-top: 1rem;">
-  <h3>Command History</h3>
-  {% with terminal_title=shell.hostname or shell.name ~ ' (' ~ shell.address ~ ')',
-          shell_type='reverse',
-          pagination=executions_pagination,
-          detail_url='main.shell_detail',
-          detail_id_name='shell_id',
-          detail_id_value=shell.id %}
-    {% include 'components/terminal_history.html' %}
-  {% endwith %}
-</section>
+<script>
+  window.TERMINAL_CONFIG = {
+    executeUrl:  '{{ url_for("main.shell_execute_api", shell_id=shell.id) }}',
+    statusUrl:   '{{ url_for("main.shell_status_api", shell_id=shell.id) }}',
+    shellType:   'reverse',
+    promptLabel: '{{ shell.shell_user or "shell" }}@{{ shell.hostname or shell.address }}$',
+    isConnected: {{ 'true' if is_connected else 'false' }},
+    csrfToken:   '{{ csrf_token() }}',
+  };
+</script>
+<script src="{{ url_for('static', filename='js/terminal.js') }}"></script>
 {% endblock %}

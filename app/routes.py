@@ -481,25 +481,25 @@ def shells_dashboard():
     # Order by last seen
     shell_query = shell_query.order_by(ReverseShell.last_seen.desc().nullslast(), ReverseShell.name.asc())
     
-    # Get all shells for filtering
+    # Fetch all shells matching the criteria
     all_shells = shell_query.all()
     
-    # Apply status filter (client-side since it depends on active connections)
+    # Apply status filter based on active connections
     if status_filter == "active":
-        filtered_shells = [s for s in all_shells if s.id in active_shell_ids]
+        shells = [s for s in all_shells if s.id in active_shell_ids]
     elif status_filter == "disconnected":
-        filtered_shells = [s for s in all_shells if s.id not in active_shell_ids]
+        shells = [s for s in all_shells if s.id not in active_shell_ids]
     else:
-        filtered_shells = all_shells
+        shells = all_shells
     
     # Manual pagination
-    total_shells = len(filtered_shells)
+    total_shells = len(shells)
     shells_per_page = PAGE_SIZE_DEFAULT
     total_pages = max(1, (total_shells + shells_per_page - 1) // shells_per_page)
     page = min(page, total_pages)
     start_idx = (page - 1) * shells_per_page
     end_idx = start_idx + shells_per_page
-    shells = filtered_shells[start_idx:end_idx]
+    paginated_shells = shells[start_idx:end_idx]
     
     # Get unique values for filter dropdowns
     all_groups = sorted([g[0] for g in db.session.query(ReverseShell.group_name).distinct().all() if g[0]])
@@ -522,7 +522,7 @@ def shells_dashboard():
     
     return render_template(
         "shells_dashboard.html",
-        shells=shells,
+        shells=paginated_shells,
         page=page,
         total_pages=total_pages,
         has_prev=page > 1,

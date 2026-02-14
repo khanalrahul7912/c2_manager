@@ -180,7 +180,7 @@ class ShellListener:
                 for cmd in test_commands:
                     try:
                         conn.sendall(cmd)
-                        time.sleep(0.3)
+                        time.sleep(0.1)  # Short wait for response
                         response = conn.recv(1024)
                         
                         # Check if we got shell-like response
@@ -207,6 +207,7 @@ class ShellListener:
                     hostname = ""
                     platform = ""
                     shell_user = ""
+                    default_hostname = f"host-{ip}"
                     
                     # Try to get hostname
                     conn.sendall(b'hostname\n')
@@ -215,9 +216,9 @@ class ShellListener:
                         hostname_raw = conn.recv(1024).decode('utf-8', errors='replace')
                         hostname = clean_shell_output(hostname_raw).strip()
                         if not hostname:
-                            hostname = f"host-{ip}"
+                            hostname = default_hostname
                     except:
-                        hostname = f"host-{ip}"
+                        hostname = default_hostname
                     
                     # Try to get username
                     conn.sendall(b'whoami 2>/dev/null || echo %USERNAME%\n')
@@ -248,7 +249,7 @@ class ShellListener:
                         platform = "unknown"
                         
                 except Exception:
-                    hostname = f"host-{ip}"
+                    hostname = default_hostname
                     platform = "Unknown"
                     shell_user = "unknown"
                 

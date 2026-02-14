@@ -170,7 +170,7 @@ class ShellListener:
                     try:
                         hostname = conn.recv(1024).decode('utf-8', errors='replace').strip()
                     except:
-                        hostname = "unknown"
+                        hostname = f"host-{ip}"
                     
                     # Try to detect OS
                     conn.sendall(b'uname -a 2>/dev/null || ver\n')
@@ -190,7 +190,7 @@ class ShellListener:
                         
                 except Exception:
                     hostname = f"host-{ip}"
-                    platform = "unknown"
+                    platform = "Unknown"
                 
                 # Create or update shell record
                 shell = ReverseShell.query.filter_by(address=ip, port=port).first()

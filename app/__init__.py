@@ -27,11 +27,11 @@ def create_app() -> Flask:
     app.register_blueprint(main_bp)
     
     # Start reverse shell listener
-    with app.app_context():
-        try:
-            start_listener(app)
-        except Exception as exc:
-            print(f"Warning: Failed to start reverse shell listener: {exc}")
+    try:
+        start_listener(app)
+    except Exception as exc:
+        app.logger.error(f"Failed to start reverse shell listener: {exc}")
+        print(f"Warning: Failed to start reverse shell listener: {exc}")
 
     @app.cli.command("create-admin")
     def create_admin() -> None:

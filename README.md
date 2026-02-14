@@ -106,10 +106,10 @@ ADMIN_PASSWORD='strong-password' flask --app app create-admin
 Run locally:
 
 ```bash
-flask --app app run --host 0.0.0.0 --port 5000
+flask --app app run --host 0.0.0.0 --port 8000
 ```
 
-The reverse shell listener will automatically start on port 5000 (same port as web interface in production, different in dev).
+**Note**: The reverse shell listener runs on port 5000. When running Flask locally, use a different port (e.g., 8000) for the web interface to avoid conflicts. In production with a WSGI server, both can coexist on the same server with proper port configuration.
 
 ## Using Reverse Shell Features
 

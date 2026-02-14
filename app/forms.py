@@ -64,3 +64,21 @@ class BulkCommandForm(FlaskForm):
     host_ids = SelectMultipleField("Target hosts", coerce=int, validators=[DataRequired()])
     command = TextAreaField("Command", validators=[DataRequired(), Length(min=1, max=2000)])
     submit = SubmitField("Run command on selected hosts")
+
+
+class ShellCommandForm(FlaskForm):
+    command = TextAreaField("Command", validators=[DataRequired(), Length(min=1, max=5000)])
+    submit = SubmitField("Execute command")
+
+
+class BulkShellCommandForm(FlaskForm):
+    shell_ids = SelectMultipleField("Target shells", coerce=int, validators=[DataRequired()])
+    command = TextAreaField("Command", validators=[DataRequired(), Length(min=1, max=2000)])
+    submit = SubmitField("Run command on selected shells")
+
+
+class ReverseShellForm(FlaskForm):
+    name = StringField("Display name", validators=[DataRequired(), Length(max=120)])
+    group_name = StringField("Group", validators=[Optional(), Length(max=80)])
+    is_active = BooleanField("Enabled", default=True)
+    submit = SubmitField("Save shell")

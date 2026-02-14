@@ -8,9 +8,19 @@ from flask import Blueprint, abort, current_app, flash, redirect, render_templat
 from flask_login import current_user, login_required, login_user, logout_user
 
 from app.extensions import db
-from app.forms import BulkCommandForm, BulkHostImportForm, CommandForm, HostForm, LoginForm
-from app.models import CommandExecution, Host, User
+from app.forms import (
+    BulkCommandForm,
+    BulkHostImportForm,
+    BulkShellCommandForm,
+    CommandForm,
+    HostForm,
+    LoginForm,
+    ReverseShellForm,
+    ShellCommandForm,
+)
+from app.models import CommandExecution, Host, ReverseShell, ShellExecution, User
 from app.security import decrypt_secret, encrypt_secret
+from app.shell_service import get_listener
 from app.ssh_service import SSHEndpoint, run_ssh_command
 
 
@@ -339,14 +349,15 @@ def bulk_operations():
                             failure_count += 1
                 except Exception as exc:  # pragma: no cover
                     failure_count += 1
+                    error_msg = f"Unexpected error during execution: {exc}"
                     with app.app_context():
-                        execution = db.session.get(CommandExecution, execution.id)
-                        if execution:
-                            execution.status = "failed"
-                            execution.stderr = f"Unexpected error during execution: {exc}"
-                            execution.completed_at = datetime.utcnow()
+                        exec_record = db.session.get(CommandExecution, execution.id)
+                        if exec_record:
+                            exec_record.status = "failed"
+                            exec_record.stderr = error_msg
+                            exec_record.completed_at = datetime.utcnow()
                             db.session.commit()
-                    flash(f"{host.name}: unexpected error during execution: {exc}", "danger")
+                    flash(f"{host.name}: {error_msg}", "danger")
 
         flash(f"Bulk execution finished: {success_count} success, {failure_count} failed.", "info")
         return redirect(url_for("main.bulk_operations"))
@@ -392,3 +403,290 @@ def host_detail(host_id: int):
         executions=executions_pagination.items,
         executions_pagination=executions_pagination,
     )
+
+
+# ============================================================================
+# Reverse Shell Routes
+# ============================================================================
+
+
+@main_bp.route("/shells")
+@login_required
+def shells_dashboard():
+    """Dashboard for reverse shell connections."""
+    group = request.args.get("group", "").strip()
+    page = _page_arg("page")
+    
+    shell_query = ReverseShell.query.order_by(ReverseShell.last_seen.desc().nullslast(), ReverseShell.name.asc())
+    if group:
+        shell_query = shell_query.filter(ReverseShell.group_name == group)
+    
+    shells_pagination = shell_query.paginate(page=page, per_page=PAGE_SIZE_DEFAULT, error_out=False)
+    
+    groups = [value[0] for value in db.session.query(ReverseShell.group_name).distinct().all() if value[0]]
+    
+    # Get active shells from listener
+    listener = get_listener(current_app._get_current_object())
+    active_shell_ids = listener.get_active_shells()
+    
+    return render_template(
+        "shells_dashboard.html",
+        shells=shells_pagination.items,
+        shells_pagination=shells_pagination,
+        groups=sorted(groups),
+        selected_group=group,
+        active_shell_ids=active_shell_ids,
+    )
+
+
+@main_bp.route("/shells/<int:shell_id>", methods=["GET", "POST"])
+@login_required
+def shell_detail(shell_id: int):
+    """Interactive shell management page."""
+    shell = db.get_or_404(ReverseShell, shell_id)
+    form = ShellCommandForm()
+    
+    # Check if shell is currently connected
+    listener = get_listener(current_app._get_current_object())
+    is_connected = shell_id in listener.get_active_shells()
+    
+    if form.validate_on_submit() and is_connected:
+        command = form.command.data.strip()
+        
+        # Create execution record
+        execution = ShellExecution(
+            shell_id=shell.id,
+            user_id=current_user.id,
+            command=command,
+            status="running",
+        )
+        db.session.add(execution)
+        db.session.commit()
+        
+        # Execute command
+        success, output = listener.execute_command(shell_id, command, timeout=60)
+        
+        # Update execution record
+        execution.output = output
+        execution.status = "success" if success else "failed"
+        execution.completed_at = datetime.utcnow()
+        db.session.commit()
+        
+        flash(f"Command executed with status: {execution.status}", "info")
+        return redirect(url_for("main.shell_detail", shell_id=shell.id))
+    
+    # Get command history
+    page = _page_arg("page")
+    executions_pagination = ShellExecution.query.filter_by(shell_id=shell.id).order_by(
+        ShellExecution.started_at.desc()
+    ).paginate(page=page, per_page=PAGE_SIZE_DEFAULT, error_out=False)
+    
+    return render_template(
+        "shell_detail.html",
+        shell=shell,
+        form=form,
+        is_connected=is_connected,
+        executions=executions_pagination.items,
+        executions_pagination=executions_pagination,
+    )
+
+
+@main_bp.route("/shells/<int:shell_id>/edit", methods=["GET", "POST"])
+@login_required
+@role_required("admin")
+def edit_shell(shell_id: int):
+    """Edit reverse shell metadata."""
+    shell = db.get_or_404(ReverseShell, shell_id)
+    form = ReverseShellForm(obj=shell)
+    
+    if form.validate_on_submit():
+        shell.name = form.name.data.strip()
+        shell.group_name = (form.group_name.data or "default").strip() or "default"
+        shell.is_active = form.is_active.data
+        db.session.commit()
+        flash("Shell updated.", "success")
+        return redirect(url_for("main.shell_detail", shell_id=shell.id))
+    
+    return render_template("shell_form.html", form=form, title=f"Edit Shell: {shell.name}")
+
+
+@main_bp.route("/operations/bulk-shells", methods=["GET", "POST"])
+@login_required
+def bulk_shell_operations():
+    """Bulk command execution on reverse shells."""
+    form = BulkShellCommandForm()
+    
+    # Get all shells
+    shells = ReverseShell.query.filter_by(is_active=True).order_by(
+        ReverseShell.group_name.asc(), ReverseShell.name.asc()
+    ).all()
+    
+    # Get active shells
+    listener = get_listener(current_app._get_current_object())
+    active_shell_ids = set(listener.get_active_shells())
+    
+    # Only show connected shells in the form
+    form.shell_ids.choices = [
+        (shell.id, f"[{shell.group_name}] {shell.name} ({shell.address}) {'✓ online' if shell.id in active_shell_ids else '✗ offline'}")
+        for shell in shells
+    ]
+    
+    if form.validate_on_submit():
+        selected_shells = [shell for shell in shells if shell.id in form.shell_ids.data]
+        if not selected_shells:
+            flash("Select at least one shell.", "warning")
+            return redirect(url_for("main.bulk_shell_operations"))
+        
+        command = form.command.data.strip()
+        success_count = 0
+        failure_count = 0
+        
+        for shell in selected_shells:
+            if shell.id not in active_shell_ids:
+                # Create failed execution for offline shells
+                execution = ShellExecution(
+                    shell_id=shell.id,
+                    user_id=current_user.id,
+                    command=command,
+                    status="failed",
+                    output="Shell is not connected",
+                    started_at=datetime.utcnow(),
+                    completed_at=datetime.utcnow(),
+                )
+                db.session.add(execution)
+                failure_count += 1
+                continue
+            
+            # Create execution record
+            execution = ShellExecution(
+                shell_id=shell.id,
+                user_id=current_user.id,
+                command=command,
+                status="running",
+            )
+            db.session.add(execution)
+            db.session.commit()
+            
+            # Execute command
+            try:
+                success, output = listener.execute_command(shell.id, command, timeout=60)
+                execution.output = output
+                execution.status = "success" if success else "failed"
+                execution.completed_at = datetime.utcnow()
+                db.session.commit()
+                
+                if success:
+                    success_count += 1
+                else:
+                    failure_count += 1
+            except Exception as exc:
+                execution.status = "failed"
+                execution.output = f"Error: {exc}"
+                execution.completed_at = datetime.utcnow()
+                db.session.commit()
+                failure_count += 1
+        
+        flash(f"Bulk execution finished: {success_count} success, {failure_count} failed.", "info")
+        return redirect(url_for("main.bulk_shell_operations"))
+    
+    # Get recent operations
+    run_page = _page_arg("page")
+    runs_pagination = ShellExecution.query.order_by(ShellExecution.started_at.desc()).paginate(
+        page=run_page, per_page=PAGE_SIZE_DEFAULT, error_out=False
+    )
+    
+    return render_template(
+        "bulk_shell_operations.html",
+        form=form,
+        recent_bulk=runs_pagination.items,
+        runs_pagination=runs_pagination,
+    )
+
+
+@main_bp.route("/export/ssh-executions")
+@login_required
+def export_ssh_executions():
+    """Export SSH command execution history as CSV."""
+    import csv
+    import io
+    from flask import make_response
+    
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Write header
+    writer.writerow(['ID', 'Host', 'Group', 'User', 'Command', 'Status', 'Return Code', 
+                     'Started At', 'Completed At', 'Duration (s)', 'Stdout', 'Stderr'])
+    
+    # Get all executions
+    executions = CommandExecution.query.order_by(CommandExecution.started_at.desc()).all()
+    
+    for exec in executions:
+        duration = ""
+        if exec.completed_at and exec.started_at:
+            delta = exec.completed_at - exec.started_at
+            duration = str(delta.total_seconds())
+        
+        writer.writerow([
+            exec.id,
+            exec.host.name,
+            exec.host.group_name,
+            exec.user.username,
+            exec.command,
+            exec.status,
+            exec.return_code,
+            exec.started_at.strftime('%Y-%m-%d %H:%M:%S'),
+            exec.completed_at.strftime('%Y-%m-%d %H:%M:%S') if exec.completed_at else '',
+            duration,
+            exec.stdout,
+            exec.stderr,
+        ])
+    
+    response = make_response(output.getvalue())
+    response.headers['Content-Type'] = 'text/csv'
+    response.headers['Content-Disposition'] = 'attachment; filename=ssh_executions.csv'
+    return response
+
+
+@main_bp.route("/export/shell-executions")
+@login_required
+def export_shell_executions():
+    """Export reverse shell command execution history as CSV."""
+    import csv
+    import io
+    from flask import make_response
+    
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Write header
+    writer.writerow(['ID', 'Shell', 'Group', 'Address', 'User', 'Command', 'Status',
+                     'Started At', 'Completed At', 'Duration (s)', 'Output'])
+    
+    # Get all executions
+    executions = ShellExecution.query.order_by(ShellExecution.started_at.desc()).all()
+    
+    for exec in executions:
+        duration = ""
+        if exec.completed_at and exec.started_at:
+            delta = exec.completed_at - exec.started_at
+            duration = str(delta.total_seconds())
+        
+        writer.writerow([
+            exec.id,
+            exec.shell.name,
+            exec.shell.group_name,
+            exec.shell.address,
+            exec.user.username,
+            exec.command,
+            exec.status,
+            exec.started_at.strftime('%Y-%m-%d %H:%M:%S'),
+            exec.completed_at.strftime('%Y-%m-%d %H:%M:%S') if exec.completed_at else '',
+            duration,
+            exec.output,
+        ])
+    
+    response = make_response(output.getvalue())
+    response.headers['Content-Type'] = 'text/csv'
+    response.headers['Content-Disposition'] = 'attachment; filename=shell_executions.csv'
+    return response

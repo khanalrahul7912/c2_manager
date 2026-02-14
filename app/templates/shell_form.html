@@ -1,0 +1,14 @@
+{% extends 'base.html' %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<section class="card narrow">
+  <h2>{{ title }}</h2>
+  <form method="post">
+    {{ form.hidden_tag() }}
+    <label>{{ form.name.label }} {{ form.name() }}</label>
+    <label>{{ form.group_name.label }} {{ form.group_name(placeholder='default') }}</label>
+    <label class="checkbox">{{ form.is_active() }} {{ form.is_active.label }}</label>
+    {{ form.submit(class_='btn') }}
+  </form>
+</section>
+{% endblock %}

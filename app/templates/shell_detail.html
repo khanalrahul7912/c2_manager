@@ -1,0 +1,95 @@
+{% extends 'base.html' %}
+{% block title %}{{ shell.name }}{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="card-header">
+    <h2>Shell: {{ shell.name }}</h2>
+    <div class="toolbar">
+      {% if current_user.role == 'admin' %}
+      <a href="{{ url_for('main.edit_shell', shell_id=shell.id) }}" class="btn ghost">Edit</a>
+      {% endif %}
+      <a href="{{ url_for('main.shells_dashboard') }}" class="btn ghost">Back to Shells</a>
+    </div>
+  </div>
+
+  <table>
+    <tr>
+      <th style="width: 200px;">Status</th>
+      <td>
+        {% if is_connected %}
+        <span class="pill success">● Connected</span>
+        {% else %}
+        <span class="pill failed">○ Disconnected</span>
+        {% endif %}
+      </td>
+    </tr>
+    <tr><th>Address</th><td><code>{{ shell.address }}:{{ shell.port }}</code></td></tr>
+    <tr><th>Group</th><td>{{ shell.group_name }}</td></tr>
+    <tr><th>Platform</th><td>{{ shell.platform or 'Unknown' }}</td></tr>
+    <tr><th>Hostname</th><td>{{ shell.hostname or '-' }}</td></tr>
+    <tr><th>Connected At</th><td>{{ shell.connected_at.strftime('%Y-%m-%d %H:%M:%S') if shell.connected_at else 'Never' }}</td></tr>
+    <tr><th>Last Seen</th><td>{{ shell.last_seen.strftime('%Y-%m-%d %H:%M:%S') if shell.last_seen else 'Never' }}</td></tr>
+    <tr><th>Disconnected At</th><td>{{ shell.disconnected_at.strftime('%Y-%m-%d %H:%M:%S') if shell.disconnected_at else '-' }}</td></tr>
+  </table>
+</section>
+
+{% if is_connected %}
+<section class="card" style="margin-top: 1rem;">
+  <h3>Execute Command</h3>
+  <form method="post">
+    {{ form.hidden_tag() }}
+    <label>{{ form.command.label }}
+      {{ form.command(rows=6, placeholder='whoami\nls -la\npwd', class_='command-input') }}
+    </label>
+    {{ form.submit(class_='btn') }}
+  </form>
+  <p style="margin-top: 0.5rem; color: #666; font-size: 0.9rem;">
+    💡 Tip: Enter commands as you would in a terminal. Output will appear below.
+  </p>
+</section>
+{% else %}
+<section class="card" style="margin-top: 1rem;">
+  <h3>Shell Offline</h3>
+  <p>This shell is not currently connected. Commands cannot be executed until it reconnects.</p>
+</section>
+{% endif %}
+
+<section class="card" style="margin-top: 1rem;">
+  <h3>Command History</h3>
+  
+  {% for exec in executions %}
+  <div class="execution">
+    <header>
+      <span class="pill {{ exec.status }}">{{ exec.status }}</span>
+      <span>{{ exec.started_at.strftime('%Y-%m-%d %H:%M:%S') }}</span>
+      <span>by {{ exec.user.username }}</span>
+      {% if exec.completed_at %}
+      <span>({{ ((exec.completed_at - exec.started_at).total_seconds()) | round(2) }}s)</span>
+      {% endif %}
+    </header>
+    <div style="margin-top: 0.5rem;">
+      <strong>Command:</strong>
+      <pre style="margin-top: 0.3rem;">{{ exec.command }}</pre>
+    </div>
+    {% if exec.output %}
+    <div style="margin-top: 0.5rem;">
+      <strong>Output:</strong>
+      <pre style="margin-top: 0.3rem;">{{ exec.output }}</pre>
+    </div>
+    {% endif %}
+  </div>
+  {% else %}
+  <p>No command history yet.</p>
+  {% endfor %}
+
+  <div class="pagination-row">
+    {% if executions_pagination.has_prev %}
+    <a class="btn ghost" href="{{ url_for('main.shell_detail', shell_id=shell.id, page=executions_pagination.prev_num) }}">Prev</a>
+    {% endif %}
+    <span>Page {{ executions_pagination.page }} / {{ executions_pagination.pages or 1 }}</span>
+    {% if executions_pagination.has_next %}
+    <a class="btn ghost" href="{{ url_for('main.shell_detail', shell_id=shell.id, page=executions_pagination.next_num) }}">Next</a>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

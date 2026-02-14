@@ -527,7 +527,12 @@ function bulkRename(type) {
     return;
   }
   
-  const pattern = prompt('Enter rename pattern (use {hostname}, {ip}, {index}):\nExample: server-{hostname}-{index}');
+  let pattern;
+  if (type === 'ssh') {
+    pattern = prompt('Enter rename pattern:\nAvailable: {name}, {ip}, {index}, {group}\nExample: server-{name}-{index}');
+  } else {
+    pattern = prompt('Enter rename pattern:\nAvailable: {hostname}, {ip}, {index}, {group}, {platform}, {user}\nExample: shell-{hostname}-{platform}-{index}');
+  }
   if (!pattern) return;
   
   const endpoint = type === 'ssh' ? '/api/bulk-rename' : '/api/bulk-rename-shells';

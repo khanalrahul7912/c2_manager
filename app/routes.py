@@ -30,6 +30,7 @@ main_bp = Blueprint("main", __name__)
 
 
 PAGE_SIZE_DEFAULT = 15
+LIVENESS_CHECK_COMMAND = "echo test"
 
 
 def _page_arg(name: str = "page") -> int:
@@ -1203,7 +1204,7 @@ def bulk_check_liveness():
                 jump_password=decrypt_secret(host.jump_password_encrypted) if host.jump_password_encrypted else None,
             )
             # Try a simple test command
-            success, _, _ = run_ssh_command(endpoint, "echo test", timeout=5)
+            success, _, _ = run_ssh_command(endpoint, LIVENESS_CHECK_COMMAND, timeout=5)
             if success:
                 online += 1
                 host.is_active = True
@@ -1239,7 +1240,7 @@ def bulk_check_shell_liveness():
     for shell in shells:
         if shell.id in active_shell_ids:
             # Try sending a simple command to verify
-            success, output = listener.execute_command(shell.id, "echo test", timeout=5)
+            success, output = listener.execute_command(shell.id, LIVENESS_CHECK_COMMAND, timeout=5)
             if success and "test" in output.lower():
                 online += 1
                 shell.status = "connected"
@@ -1315,7 +1316,7 @@ def bulk_rename():
     for index, host in enumerate(hosts, start=1):
         # Replace variables in pattern
         new_name = pattern
-        new_name = new_name.replace("{hostname}", host.name)
+        new_name = new_name.replace("{name}", host.name)
         new_name = new_name.replace("{ip}", host.address)
         new_name = new_name.replace("{index}", str(index))
         new_name = new_name.replace("{group}", host.group_name)

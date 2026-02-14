@@ -4,9 +4,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from functools import wraps
 
-from flask import Blueprint, abort, current_app, flash, redirect, render_template, request, url_for
+from flask import Blueprint, abort, current_app, flash, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user, login_required, login_user, logout_user
 
+from app.export_utils import ExportHelper
 from app.extensions import db
 from app.forms import (
     BulkCommandForm,
@@ -270,13 +271,26 @@ def _build_jump(host: Host) -> SSHEndpoint | None:
     )
 
 
-def _run_command_for_host(host: Host, command: str, timeout: int):
+def _run_command_for_host(host: Host, command: str, timeout: int, target: SSHEndpoint, jump_host: SSHEndpoint | None):
+    """
+    Run SSH command for a host. Target and jump_host must be built before calling.
+    
+    Args:
+        host: The Host object for which to run the command
+        command: The shell command to execute
+        timeout: Command execution timeout in seconds
+        target: Pre-built SSHEndpoint for the target host
+        jump_host: Pre-built SSHEndpoint for jump host, or None if not using jump host
+        
+    Returns:
+        tuple: (host.id, SSHCommandResult)
+    """
     return host.id, run_ssh_command(
-        target=_build_target(host),
+        target=target,
         command=command,
         timeout=timeout,
         strict_host_key=host.strict_host_key,
-        jump_host=_build_jump(host),
+        jump_host=jump_host,
     )
 
 
@@ -330,9 +344,27 @@ def bulk_operations():
         app = current_app._get_current_object()  # Get app instance for thread context
         execution_map = {host.id: _create_execution(host, command, user_id) for host in selected_hosts}
 
+        # Build SSH endpoints before ThreadPoolExecutor to avoid app context issues
+        host_configs = {
+            host.id: {
+                'host': host,
+                'target': _build_target(host),
+                'jump_host': _build_jump(host)
+            }
+            for host in selected_hosts
+        }
+
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
-                executor.submit(_run_command_for_host, host, command, timeout): host for host in selected_hosts
+                executor.submit(
+                    _run_command_for_host, 
+                    config['host'], 
+                    command, 
+                    timeout,
+                    config['target'],
+                    config['jump_host']
+                ): config['host'] 
+                for config in host_configs.values()
             }
             for future in as_completed(futures):
                 host = futures[future]
@@ -463,13 +495,17 @@ def shell_detail(shell_id: int):
         db.session.add(execution)
         db.session.commit()
         
-        # Execute command
+        # Execute command and track time
+        start_time = datetime.utcnow()
         success, output = listener.execute_command(shell_id, command, timeout=60)
+        execution_time = (datetime.utcnow() - start_time).total_seconds()
         
         # Update execution record
         execution.output = output
+        execution.stdout = output  # For now, store same in stdout
         execution.status = "success" if success else "failed"
         execution.completed_at = datetime.utcnow()
+        execution.execution_time = execution_time
         db.session.commit()
         
         flash(f"Command executed with status: {execution.status}", "info")
@@ -690,3 +726,243 @@ def export_shell_executions():
     response.headers['Content-Type'] = 'text/csv'
     response.headers['Content-Disposition'] = 'attachment; filename=shell_executions.csv'
     return response
+
+
+# API Routes for Reverse Shell Management
+
+@main_bp.route("/sessions", methods=["GET"])
+@login_required
+def sessions():
+    """
+    Alias to shells_dashboard for API compatibility.
+    Display table of all reverse shell sessions.
+    """
+    return shells_dashboard()
+
+
+@main_bp.route("/api/sessions", methods=["GET"])
+@login_required
+def api_sessions():
+    """
+    JSON API endpoint to list all reverse shell sessions.
+    
+    Returns:
+        JSON array of session objects with metadata
+    """
+    group = request.args.get("group", "").strip()
+    
+    shell_query = ReverseShell.query.order_by(ReverseShell.last_seen.desc().nullslast(), ReverseShell.name.asc())
+    if group:
+        shell_query = shell_query.filter(ReverseShell.group_name == group)
+    
+    shells = shell_query.all()
+    
+    # Get active shells from listener
+    listener = get_listener(current_app._get_current_object())
+    active_shell_ids = listener.get_active_shells()
+    
+    sessions_data = []
+    for shell in shells:
+        sessions_data.append({
+            'id': shell.id,
+            'session_id': shell.session_id,
+            'name': shell.name,
+            'address': shell.address,
+            'port': shell.port,
+            'group_name': shell.group_name,
+            'hostname': shell.hostname,
+            'platform': shell.platform,
+            'shell_user': shell.shell_user,
+            'status': 'active' if shell.id in active_shell_ids else 'disconnected',
+            'connected_at': shell.connected_at.isoformat() if shell.connected_at else None,
+            'last_seen': shell.last_seen.isoformat() if shell.last_seen else None,
+            'disconnected_at': shell.disconnected_at.isoformat() if shell.disconnected_at else None,
+            'notes': shell.notes,
+        })
+    
+    return jsonify({
+        'success': True,
+        'count': len(sessions_data),
+        'sessions': sessions_data
+    })
+
+
+@main_bp.route("/execute/<session_id>", methods=["POST"])
+@login_required
+def execute_command_api(session_id: str):
+    """
+    Execute command on specific reverse shell session via API.
+    
+    Request JSON:
+    {
+        "command": "whoami"
+    }
+    
+    Response JSON:
+    {
+        "success": true,
+        "stdout": "root\\n",
+        "stderr": "",
+        "exit_code": 0,
+        "execution_time": 0.234
+    }
+    
+    Error Response:
+    {
+        "success": false,
+        "error": "Session not found or disconnected"
+    }
+    """
+    # Get command from JSON request
+    data = request.get_json()
+    if not data or 'command' not in data:
+        return jsonify({
+            'success': False,
+            'error': 'Missing command in request body'
+        }), 400
+    
+    command = data['command'].strip()
+    if not command:
+        return jsonify({
+            'success': False,
+            'error': 'Command cannot be empty'
+        }), 400
+    
+    # Find shell by session_id
+    shell = ReverseShell.query.filter_by(session_id=session_id).first()
+    if not shell:
+        return jsonify({
+            'success': False,
+            'error': 'Session not found'
+        }), 404
+    
+    # Check if shell is currently connected
+    listener = get_listener(current_app._get_current_object())
+    if shell.id not in listener.get_active_shells():
+        return jsonify({
+            'success': False,
+            'error': 'Session is not currently connected'
+        }), 503
+    
+    # Create execution record
+    execution = ShellExecution(
+        shell_id=shell.id,
+        user_id=current_user.id,
+        command=command,
+        status="running",
+    )
+    db.session.add(execution)
+    db.session.commit()
+    
+    # Execute command and track time
+    start_time = datetime.utcnow()
+    timeout = current_app.config.get('SHELL_COMMAND_TIMEOUT', 30)
+    success, output = listener.execute_command(shell.id, command, timeout=timeout)
+    execution_time = (datetime.utcnow() - start_time).total_seconds()
+    
+    # Update execution record
+    execution.output = output
+    execution.stdout = output
+    execution.status = "success" if success else "failed"
+    execution.completed_at = datetime.utcnow()
+    execution.execution_time = execution_time
+    db.session.commit()
+    
+    # Return JSON response
+    return jsonify({
+        'success': success,
+        'stdout': output if success else "",
+        'stderr': "" if success else output,
+        'exit_code': 0 if success else -1,
+        'execution_time': execution_time,
+        'execution_id': execution.id
+    })
+
+
+# Enhanced Export Routes
+
+@main_bp.route("/export/sessions/<format>")
+@login_required
+def export_sessions(format: str):
+    """
+    Export reverse shell sessions in various formats.
+    Supports: csv, json, xlsx
+    """
+    shells = ReverseShell.query.order_by(ReverseShell.last_seen.desc().nullslast()).all()
+    
+    # Get active shells
+    listener = get_listener(current_app._get_current_object())
+    active_shell_ids = set(listener.get_active_shells())
+    
+    # Prepare data
+    sessions_data = []
+    for shell in shells:
+        sessions_data.append({
+            'id': shell.id,
+            'session_id': shell.session_id or '',
+            'name': shell.name,
+            'address': shell.address,
+            'port': shell.port,
+            'group_name': shell.group_name,
+            'hostname': shell.hostname or '',
+            'platform': shell.platform or '',
+            'shell_user': shell.shell_user or '',
+            'status': 'active' if shell.id in active_shell_ids else 'disconnected',
+            'connected_at': shell.connected_at.strftime('%Y-%m-%d %H:%M:%S') if shell.connected_at else '',
+            'last_seen': shell.last_seen.strftime('%Y-%m-%d %H:%M:%S') if shell.last_seen else '',
+            'disconnected_at': shell.disconnected_at.strftime('%Y-%m-%d %H:%M:%S') if shell.disconnected_at else '',
+            'notes': shell.notes or '',
+        })
+    
+    if format.lower() == 'json':
+        return ExportHelper.to_json_response(sessions_data, 'sessions.json')
+    elif format.lower() in ['xlsx', 'excel']:
+        return ExportHelper.to_excel_response(sessions_data, 'sessions.xlsx', 'Reverse Shell Sessions')
+    else:  # default to CSV
+        fieldnames = ['id', 'session_id', 'name', 'address', 'port', 'group_name', 'hostname', 
+                     'platform', 'shell_user', 'status', 'connected_at', 'last_seen', 'disconnected_at', 'notes']
+        return ExportHelper.to_csv_response(sessions_data, 'sessions.csv', fieldnames)
+
+
+@main_bp.route("/export/commands/<format>")
+@login_required
+def export_commands(format: str):
+    """
+    Export shell command history in various formats.
+    Supports: csv, json, xlsx
+    """
+    executions = ShellExecution.query.order_by(ShellExecution.started_at.desc()).all()
+    
+    # Prepare data
+    commands_data = []
+    for exec in executions:
+        duration = ""
+        if exec.completed_at and exec.started_at:
+            delta = exec.completed_at - exec.started_at
+            duration = str(delta.total_seconds())
+        
+        commands_data.append({
+            'id': exec.id,
+            'shell_name': exec.shell.name,
+            'shell_address': exec.shell.address,
+            'group_name': exec.shell.group_name,
+            'user': exec.user.username,
+            'command': exec.command,
+            'status': exec.status,
+            'output': exec.output or '',
+            'stdout': exec.stdout or '',
+            'stderr': exec.stderr or '',
+            'exit_code': exec.exit_code if exec.exit_code is not None else '',
+            'started_at': exec.started_at.strftime('%Y-%m-%d %H:%M:%S'),
+            'completed_at': exec.completed_at.strftime('%Y-%m-%d %H:%M:%S') if exec.completed_at else '',
+            'execution_time': exec.execution_time if exec.execution_time else duration,
+        })
+    
+    if format.lower() == 'json':
+        return ExportHelper.to_json_response(commands_data, 'shell_commands.json')
+    elif format.lower() in ['xlsx', 'excel']:
+        return ExportHelper.to_excel_response(commands_data, 'shell_commands.xlsx', 'Shell Commands')
+    else:  # default to CSV
+        fieldnames = ['id', 'shell_name', 'shell_address', 'group_name', 'user', 'command', 'status',
+                     'output', 'stdout', 'stderr', 'exit_code', 'started_at', 'completed_at', 'execution_time']
+        return ExportHelper.to_csv_response(commands_data, 'shell_commands.csv', fieldnames)

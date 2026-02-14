@@ -1,6 +1,14 @@
-from flask_login import LoginManager
-from flask_migrate import Migrate
-from flask_sqlalchemy import SQLAlchemy
+from __future__ import annotations
+
+try:
+    from flask_login import LoginManager
+    from flask_migrate import Migrate
+    from flask_sqlalchemy import SQLAlchemy
+except ImportError as exc:
+    raise ImportError(
+        f"Required Flask extension not found: {exc}. "
+        "Please install all dependencies: pip install -r requirements.txt"
+    ) from exc
 
 
 db = SQLAlchemy()

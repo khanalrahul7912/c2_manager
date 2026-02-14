@@ -39,6 +39,16 @@ class Config:
     SESSION_COOKIE_HTTPONLY = True
     REMEMBER_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = "Lax"
+    
+    # Reverse Shell Listener Configuration
+    REVERSE_SHELL_PORT = int(os.getenv("REVERSE_SHELL_PORT", "5000"))
+    REVERSE_SHELL_BIND_ADDRESS = os.getenv("REVERSE_SHELL_BIND_ADDRESS", "0.0.0.0")
+    REVERSE_SHELL_TIMEOUT = int(os.getenv("REVERSE_SHELL_TIMEOUT", "30"))
+    MAX_SHELL_SESSIONS = int(os.getenv("MAX_SHELL_SESSIONS", "100"))
+    SHELL_COMMAND_TIMEOUT = int(os.getenv("SHELL_COMMAND_TIMEOUT", "30"))
+    
+    # SSH Configuration
+    MAX_SSH_WORKERS = int(os.getenv("MAX_SSH_WORKERS", "8"))
 
 
 class ProductionConfig(Config):

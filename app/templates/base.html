@@ -12,12 +12,9 @@
       {% if current_user.is_authenticated %}
       <nav class="topnav">
         <a href="{{ url_for('main.unified_dashboard') }}">🏠 Control Panel</a>
-        <a href="{{ url_for('main.dashboard') }}">SSH Hosts</a>
-        <a href="{{ url_for('main.shells_dashboard') }}">Reverse Shells</a>
-        <a href="{{ url_for('main.bulk_operations') }}">SSH Bulk Ops</a>
-        <a href="{{ url_for('main.bulk_shell_operations') }}">Shell Bulk Ops</a>
+        <a href="{{ url_for('main.bulk_operations') }}">⚡ Bulk Operations</a>
         {% if current_user.role == 'admin' %}
-        <a href="{{ url_for('main.import_hosts') }}">Bulk Import</a>
+        <a href="{{ url_for('main.import_hosts') }}">📥 Import SSH Hosts</a>
         {% endif %}
         <span>{{ current_user.username }} ({{ current_user.role }})</span>
         <a href="{{ url_for('auth.logout') }}">Logout</a>

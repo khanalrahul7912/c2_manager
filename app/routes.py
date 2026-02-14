@@ -86,7 +86,7 @@ def logout():
 @login_required
 def dashboard():
     """Legacy SSH dashboard - redirect to unified dashboard."""
-    return redirect(url_for("main.unified_dashboard", view="ssh"))
+    return redirect(url_for("main.unified_dashboard", view="shells"))
 
 
 @main_bp.route("/hosts")
@@ -332,29 +332,44 @@ def _complete_execution(app, execution_id: int, result) -> None:
 @main_bp.route("/operations/bulk", methods=["GET", "POST"])
 @login_required
 def bulk_operations():
-    form = BulkCommandForm()
+    view_type = request.args.get("view", "shells").strip()
+    ssh_form = BulkCommandForm()
+    shell_form = BulkShellCommandForm()
+
+    # SSH hosts
     hosts = Host.query.filter_by(is_active=True).order_by(Host.group_name.asc(), Host.name.asc()).all()
-    form.host_ids.choices = [
+    ssh_form.host_ids.choices = [
         (host.id, f"[{host.group_name}] {host.name} ({host.username}@{host.address}:{host.port})") for host in hosts
     ]
 
-    if form.validate_on_submit():
-        selected_hosts = [host for host in hosts if host.id in form.host_ids.data]
+    # Reverse shells
+    shells = ReverseShell.query.filter_by(is_active=True).order_by(
+        ReverseShell.group_name.asc(), ReverseShell.name.asc()
+    ).all()
+    listener = get_listener(current_app._get_current_object())
+    active_shell_ids = set(listener.get_active_shells())
+    shell_form.shell_ids.choices = [
+        (shell.id, f"[{shell.group_name}] {shell.name} ({shell.address}) {'✓ online' if shell.id in active_shell_ids else '✗ offline'}")
+        for shell in shells
+    ]
+
+    # Handle SSH bulk command submission
+    if view_type == "ssh" and request.method == "POST" and ssh_form.validate_on_submit():
+        selected_hosts = [host for host in hosts if host.id in ssh_form.host_ids.data]
         if not selected_hosts:
             flash("Select at least one host.", "warning")
-            return redirect(url_for("main.bulk_operations"))
+            return redirect(url_for("main.bulk_operations", view="ssh"))
 
-        command = form.command.data.strip()
+        command = ssh_form.command.data.strip()
         max_workers = min(max(len(selected_hosts), 1), 8)
         success_count = 0
         failure_count = 0
 
         timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
-        user_id = current_user.id  # Get user_id before thread pool
-        app = current_app._get_current_object()  # Get app instance for thread context
+        user_id = current_user.id
+        app = current_app._get_current_object()
         execution_map = {host.id: _create_execution(host, command, user_id) for host in selected_hosts}
 
-        # Build SSH endpoints before ThreadPoolExecutor to avoid app context issues
         host_configs = {
             host.id: {
                 'host': host,
@@ -367,13 +382,13 @@ def bulk_operations():
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
                 executor.submit(
-                    _run_command_for_host, 
-                    config['host'], 
-                    command, 
+                    _run_command_for_host,
+                    config['host'],
+                    command,
                     timeout,
                     config['target'],
                     config['jump_host']
-                ): config['host'] 
+                ): config['host']
                 for config in host_configs.values()
             }
             for future in as_completed(futures):
@@ -382,14 +397,13 @@ def bulk_operations():
                 try:
                     _, result = future.result()
                     _complete_execution(app, execution.id, result)
-                    # Re-query to get updated status
                     with app.app_context():
                         execution = db.session.get(CommandExecution, execution.id)
                         if execution.status == "success":
                             success_count += 1
                         else:
                             failure_count += 1
-                except Exception as exc:  # pragma: no cover
+                except Exception as exc:
                     failure_count += 1
                     error_msg = f"Unexpected error during execution: {exc}"
                     with app.app_context():
@@ -401,18 +415,83 @@ def bulk_operations():
                             db.session.commit()
                     flash(f"{host.name}: {error_msg}", "danger")
 
-        flash(f"Bulk execution finished: {success_count} success, {failure_count} failed.", "info")
-        return redirect(url_for("main.bulk_operations"))
+        flash(f"SSH bulk execution finished: {success_count} success, {failure_count} failed.", "info")
+        return redirect(url_for("main.bulk_operations", view="ssh"))
 
-    run_page = _page_arg("page")
-    runs_pagination = CommandExecution.query.order_by(CommandExecution.started_at.desc()).paginate(
-        page=run_page, per_page=PAGE_SIZE_DEFAULT, error_out=False
+    # Handle reverse shell bulk command submission
+    if view_type == "shells" and request.method == "POST" and shell_form.validate_on_submit():
+        selected_shells = [shell for shell in shells if shell.id in shell_form.shell_ids.data]
+        if not selected_shells:
+            flash("Select at least one shell.", "warning")
+            return redirect(url_for("main.bulk_operations", view="shells"))
+
+        command = shell_form.command.data.strip()
+        success_count = 0
+        failure_count = 0
+
+        for shell in selected_shells:
+            if shell.id not in active_shell_ids:
+                execution = ShellExecution(
+                    shell_id=shell.id,
+                    user_id=current_user.id,
+                    command=command,
+                    status="failed",
+                    output="Shell is not connected",
+                    started_at=datetime.utcnow(),
+                    completed_at=datetime.utcnow(),
+                )
+                db.session.add(execution)
+                failure_count += 1
+                continue
+
+            execution = ShellExecution(
+                shell_id=shell.id,
+                user_id=current_user.id,
+                command=command,
+                status="running",
+            )
+            db.session.add(execution)
+            db.session.commit()
+
+            try:
+                success, output = listener.execute_command(shell.id, command, timeout=60)
+                execution.output = output
+                execution.status = "success" if success else "failed"
+                execution.completed_at = datetime.utcnow()
+                db.session.commit()
+
+                if success:
+                    success_count += 1
+                else:
+                    failure_count += 1
+            except Exception as exc:
+                execution.status = "failed"
+                execution.output = f"Error: {exc}"
+                execution.completed_at = datetime.utcnow()
+                db.session.commit()
+                failure_count += 1
+
+        flash(f"Shell bulk execution finished: {success_count} success, {failure_count} failed.", "info")
+        return redirect(url_for("main.bulk_operations", view="shells"))
+
+    # Recent operations for both types
+    ssh_run_page = _page_arg("ssh_page")
+    ssh_runs_pagination = CommandExecution.query.order_by(CommandExecution.started_at.desc()).paginate(
+        page=ssh_run_page, per_page=PAGE_SIZE_DEFAULT, error_out=False
+    )
+    shell_run_page = _page_arg("shell_page")
+    shell_runs_pagination = ShellExecution.query.order_by(ShellExecution.started_at.desc()).paginate(
+        page=shell_run_page, per_page=PAGE_SIZE_DEFAULT, error_out=False
     )
     return render_template(
         "bulk_operations.html",
-        form=form,
-        recent_bulk=runs_pagination.items,
-        runs_pagination=runs_pagination,
+        view_type=view_type,
+        ssh_form=ssh_form,
+        shell_form=shell_form,
+        ssh_recent_bulk=ssh_runs_pagination.items,
+        ssh_runs_pagination=ssh_runs_pagination,
+        shell_recent_bulk=shell_runs_pagination.items,
+        shell_runs_pagination=shell_runs_pagination,
     )
 
 
@@ -425,12 +504,21 @@ def host_detail(host_id: int):
     if form.validate_on_submit():
         command = form.command.data.strip()
         execution = _create_execution(host, command, current_user.id)
-        result = _run_command_for_host(host, command, current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30))[1]
-        app = current_app._get_current_object()
-        _complete_execution(app, execution.id, result)
-        # Re-query execution to get updated status
-        execution = db.session.get(CommandExecution, execution.id)
-        flash(f"Command completed with status {execution.status}.", "info")
+        try:
+            target = _build_target(host)
+            jump_host = _build_jump(host)
+            result = _run_command_for_host(host, command, current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30), target, jump_host)[1]
+            app = current_app._get_current_object()
+            _complete_execution(app, execution.id, result)
+            # Re-query execution to get updated status
+            execution = db.session.get(CommandExecution, execution.id)
+            flash(f"Command completed with status {execution.status}.", "info")
+        except Exception as exc:
+            execution.status = "failed"
+            execution.stderr = f"Error: {exc}"
+            execution.completed_at = datetime.utcnow()
+            db.session.commit()
+            flash(f"Command failed: {exc}", "danger")
         return redirect(url_for("main.host_detail", host_id=host.id))
 
     page = _page_arg("page")
@@ -577,20 +665,31 @@ def shell_detail(shell_id: int):
         db.session.add(execution)
         db.session.commit()
         
-        # Execute command and track time
-        start_time = datetime.utcnow()
-        success, output = listener.execute_command(shell_id, command, timeout=60)
-        execution_time = (datetime.utcnow() - start_time).total_seconds()
+        try:
+            # Execute command and track time
+            start_time = datetime.utcnow()
+            success, output = listener.execute_command(shell_id, command, timeout=60)
+            execution_time = (datetime.utcnow() - start_time).total_seconds()
+            
+            # Update execution record
+            execution.output = output
+            execution.stdout = output
+            execution.status = "success" if success else "failed"
+            execution.completed_at = datetime.utcnow()
+            execution.execution_time = execution_time
+            db.session.commit()
+            
+            flash(f"Command executed with status: {execution.status}", "info")
+        except Exception as exc:
+            execution.status = "failed"
+            execution.output = f"Error: {exc}"
+            execution.completed_at = datetime.utcnow()
+            db.session.commit()
+            flash(f"Command failed: {exc}", "danger")
         
-        # Update execution record
-        execution.output = output
-        execution.stdout = output  # For now, store same in stdout
-        execution.status = "success" if success else "failed"
-        execution.completed_at = datetime.utcnow()
-        execution.execution_time = execution_time
-        db.session.commit()
-        
-        flash(f"Command executed with status: {execution.status}", "info")
+        return redirect(url_for("main.shell_detail", shell_id=shell.id))
+    elif form.validate_on_submit() and not is_connected:
+        flash("Shell is not connected. Cannot execute commands.", "warning")
         return redirect(url_for("main.shell_detail", shell_id=shell.id))
     
     # Get command history
@@ -937,28 +1036,39 @@ def execute_command_api(session_id: str):
     db.session.commit()
     
     # Execute command and track time
-    start_time = datetime.utcnow()
-    timeout = current_app.config.get('SHELL_COMMAND_TIMEOUT', 30)
-    success, output = listener.execute_command(shell.id, command, timeout=timeout)
-    execution_time = (datetime.utcnow() - start_time).total_seconds()
-    
-    # Update execution record
-    execution.output = output
-    execution.stdout = output
-    execution.status = "success" if success else "failed"
-    execution.completed_at = datetime.utcnow()
-    execution.execution_time = execution_time
-    db.session.commit()
-    
-    # Return JSON response
-    return jsonify({
-        'success': success,
-        'stdout': output if success else "",
-        'stderr': "" if success else output,
-        'exit_code': 0 if success else -1,
-        'execution_time': execution_time,
-        'execution_id': execution.id
-    })
+    try:
+        start_time = datetime.utcnow()
+        timeout = current_app.config.get('SHELL_COMMAND_TIMEOUT', 30)
+        success, output = listener.execute_command(shell.id, command, timeout=timeout)
+        execution_time = (datetime.utcnow() - start_time).total_seconds()
+        
+        # Update execution record
+        execution.output = output
+        execution.stdout = output
+        execution.status = "success" if success else "failed"
+        execution.completed_at = datetime.utcnow()
+        execution.execution_time = execution_time
+        db.session.commit()
+        
+        # Return JSON response
+        return jsonify({
+            'success': success,
+            'stdout': output if success else "",
+            'stderr': "" if success else output,
+            'exit_code': 0 if success else -1,
+            'execution_time': execution_time,
+            'execution_id': execution.id
+        })
+    except Exception as exc:
+        execution.status = "failed"
+        execution.output = f"Error: {exc}"
+        execution.completed_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({
+            'success': False,
+            'error': f"Command execution failed: {exc}",
+            'execution_id': execution.id
+        }), 500
 
 
 # Enhanced Export Routes
@@ -1054,7 +1164,7 @@ def export_commands(format: str):
 @login_required
 def unified_dashboard():
     """Unified dashboard for both SSH hosts and reverse shells."""
-    view_type = request.args.get("view", "ssh").strip()
+    view_type = request.args.get("view", "shells").strip()
     
     # SSH Hosts data
     ssh_group = request.args.get("group", "").strip()
@@ -1187,25 +1297,16 @@ def bulk_check_liveness():
     
     for host in hosts:
         try:
-            endpoint = SSHEndpoint(
-                address=host.address,
-                port=host.port,
-                username=host.username,
-                auth_mode=host.auth_mode,
-                key_path=host.key_path,
-                password=decrypt_secret(host.password_encrypted) if host.password_encrypted else None,
+            target = _build_target(host)
+            jump_host = _build_jump(host)
+            result = run_ssh_command(
+                target=target,
+                command=LIVENESS_CHECK_COMMAND,
+                timeout=5,
                 strict_host_key=host.strict_host_key,
-                use_jump_host=host.use_jump_host,
-                jump_address=host.jump_address,
-                jump_port=host.jump_port,
-                jump_username=host.jump_username,
-                jump_auth_mode=host.jump_auth_mode,
-                jump_key_path=host.jump_key_path,
-                jump_password=decrypt_secret(host.jump_password_encrypted) if host.jump_password_encrypted else None,
+                jump_host=jump_host,
             )
-            # Try a simple test command
-            success, _, _ = run_ssh_command(endpoint, LIVENESS_CHECK_COMMAND, timeout=5)
-            if success:
+            if result.return_code == 0:
                 online += 1
                 host.is_active = True
             else:
@@ -1399,3 +1500,380 @@ def bulk_delete_shells():
     db.session.commit()
     
     return jsonify({"deleted": deleted})
+
+
+# ============================================================================
+# Orchestration API Endpoints
+# ============================================================================
+
+
+def _orchestrate_ssh(host_ids: list, command: str, timeout: int = 30) -> list[dict]:
+    """Run a command on multiple SSH hosts and return results."""
+    hosts = Host.query.filter(Host.id.in_(host_ids), Host.is_active.is_(True)).all()
+    results = []
+    max_workers = min(max(len(hosts), 1), 8)
+
+    host_configs = {}
+    for host in hosts:
+        try:
+            host_configs[host.id] = {
+                'host': host,
+                'target': _build_target(host),
+                'jump_host': _build_jump(host),
+            }
+        except Exception as exc:
+            results.append({'host_id': host.id, 'host_name': host.name, 'success': False, 'output': f"Config error: {exc}"})
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(
+                _run_command_for_host,
+                cfg['host'], command, timeout, cfg['target'], cfg['jump_host']
+            ): cfg['host']
+            for cfg in host_configs.values()
+        }
+        for future in as_completed(futures):
+            host = futures[future]
+            try:
+                _, result = future.result()
+                results.append({
+                    'host_id': host.id,
+                    'host_name': host.name,
+                    'success': result.return_code == 0,
+                    'stdout': result.stdout,
+                    'stderr': result.stderr,
+                    'return_code': result.return_code,
+                })
+            except Exception as exc:
+                results.append({'host_id': host.id, 'host_name': host.name, 'success': False, 'output': str(exc)})
+
+    return results
+
+
+def _orchestrate_shells(shell_ids: list, command: str, timeout: int = 30) -> list[dict]:
+    """Run a command on multiple reverse shells and return results."""
+    shells = ReverseShell.query.filter(ReverseShell.id.in_(shell_ids), ReverseShell.is_active.is_(True)).all()
+    listener = get_listener(current_app._get_current_object())
+    active = set(listener.get_active_shells())
+    results = []
+
+    for shell in shells:
+        if shell.id not in active:
+            results.append({'shell_id': shell.id, 'shell_name': shell.name, 'success': False, 'output': 'Shell is not connected'})
+            continue
+        try:
+            success, output = listener.execute_command(shell.id, command, timeout=timeout)
+            results.append({'shell_id': shell.id, 'shell_name': shell.name, 'success': success, 'output': output})
+        except Exception as exc:
+            results.append({'shell_id': shell.id, 'shell_name': shell.name, 'success': False, 'output': str(exc)})
+
+    return results
+
+
+@main_bp.route("/api/orchestrate/system-info", methods=["POST"])
+@login_required
+def orchestrate_system_info():
+    """Gather system information from selected hosts/shells.
+
+    Request JSON: {"type": "ssh" | "shell", "ids": [1, 2, 3]}
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "Request body required"}), 400
+
+    target_type = data.get("type", "shell")
+    ids = data.get("ids", [])
+    if not ids:
+        return jsonify({"success": False, "error": "No IDs provided"}), 400
+
+    command = "echo '===HOSTNAME==='; hostname 2>/dev/null; echo '===OS==='; uname -a 2>/dev/null || ver 2>nul; echo '===UPTIME==='; uptime 2>/dev/null; echo '===MEMORY==='; free -h 2>/dev/null || systeminfo 2>nul | findstr Memory; echo '===DISK==='; df -h 2>/dev/null || wmic logicaldisk get size,freespace,caption 2>nul; echo '===CPU==='; nproc 2>/dev/null || echo %NUMBER_OF_PROCESSORS% 2>nul"
+    timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
+
+    if target_type == "ssh":
+        results = _orchestrate_ssh(ids, command, timeout)
+    else:
+        results = _orchestrate_shells(ids, command, timeout)
+
+    return jsonify({"success": True, "results": results})
+
+
+@main_bp.route("/api/orchestrate/network-info", methods=["POST"])
+@login_required
+def orchestrate_network_info():
+    """Gather network information from selected hosts/shells.
+
+    Request JSON: {"type": "ssh" | "shell", "ids": [1, 2, 3]}
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "Request body required"}), 400
+
+    target_type = data.get("type", "shell")
+    ids = data.get("ids", [])
+    if not ids:
+        return jsonify({"success": False, "error": "No IDs provided"}), 400
+
+    command = "echo '===INTERFACES==='; ip addr 2>/dev/null || ifconfig 2>/dev/null || ipconfig 2>nul; echo '===ROUTES==='; ip route 2>/dev/null || route -n 2>/dev/null || route print 2>nul; echo '===DNS==='; cat /etc/resolv.conf 2>/dev/null; echo '===CONNECTIONS==='; ss -tuln 2>/dev/null || netstat -tuln 2>/dev/null || netstat -an 2>nul"
+    timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
+
+    if target_type == "ssh":
+        results = _orchestrate_ssh(ids, command, timeout)
+    else:
+        results = _orchestrate_shells(ids, command, timeout)
+
+    return jsonify({"success": True, "results": results})
+
+
+@main_bp.route("/api/orchestrate/process-list", methods=["POST"])
+@login_required
+def orchestrate_process_list():
+    """Get running processes from selected hosts/shells.
+
+    Request JSON: {"type": "ssh" | "shell", "ids": [1, 2, 3]}
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "Request body required"}), 400
+
+    target_type = data.get("type", "shell")
+    ids = data.get("ids", [])
+    if not ids:
+        return jsonify({"success": False, "error": "No IDs provided"}), 400
+
+    command = "ps aux 2>/dev/null || tasklist 2>nul"
+    timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
+
+    if target_type == "ssh":
+        results = _orchestrate_ssh(ids, command, timeout)
+    else:
+        results = _orchestrate_shells(ids, command, timeout)
+
+    return jsonify({"success": True, "results": results})
+
+
+@main_bp.route("/api/orchestrate/user-info", methods=["POST"])
+@login_required
+def orchestrate_user_info():
+    """Get user/account information from selected hosts/shells.
+
+    Request JSON: {"type": "ssh" | "shell", "ids": [1, 2, 3]}
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "Request body required"}), 400
+
+    target_type = data.get("type", "shell")
+    ids = data.get("ids", [])
+    if not ids:
+        return jsonify({"success": False, "error": "No IDs provided"}), 400
+
+    command = "echo '===CURRENT_USER==='; whoami 2>/dev/null; echo '===ID==='; id 2>/dev/null; echo '===LOGGED_IN==='; who 2>/dev/null || query user 2>nul; echo '===USERS==='; cat /etc/passwd 2>/dev/null | head -30 || net user 2>nul; echo '===SUDO==='; sudo -l 2>/dev/null || echo 'sudo not available'"
+    timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
+
+    if target_type == "ssh":
+        results = _orchestrate_ssh(ids, command, timeout)
+    else:
+        results = _orchestrate_shells(ids, command, timeout)
+
+    return jsonify({"success": True, "results": results})
+
+
+@main_bp.route("/api/orchestrate/service-status", methods=["POST"])
+@login_required
+def orchestrate_service_status():
+    """Get service/daemon status from selected hosts/shells.
+
+    Request JSON: {"type": "ssh" | "shell", "ids": [1, 2, 3], "service": "nginx" (optional)}
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "Request body required"}), 400
+
+    target_type = data.get("type", "shell")
+    ids = data.get("ids", [])
+    service = data.get("service", "").strip()
+    if not ids:
+        return jsonify({"success": False, "error": "No IDs provided"}), 400
+
+    if service:
+        command = f"systemctl status {service} 2>/dev/null || service {service} status 2>/dev/null || sc query {service} 2>nul"
+    else:
+        command = "systemctl list-units --type=service --state=running 2>/dev/null || service --status-all 2>/dev/null || sc query state= all 2>nul | head -60"
+    timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
+
+    if target_type == "ssh":
+        results = _orchestrate_ssh(ids, command, timeout)
+    else:
+        results = _orchestrate_shells(ids, command, timeout)
+
+    return jsonify({"success": True, "results": results})
+
+
+@main_bp.route("/api/orchestrate/file-read", methods=["POST"])
+@login_required
+def orchestrate_file_read():
+    """Read a file from selected hosts/shells.
+
+    Request JSON: {"type": "ssh" | "shell", "ids": [1, 2, 3], "path": "/etc/hostname"}
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "Request body required"}), 400
+
+    target_type = data.get("type", "shell")
+    ids = data.get("ids", [])
+    file_path = data.get("path", "").strip()
+    if not ids or not file_path:
+        return jsonify({"success": False, "error": "IDs and file path required"}), 400
+
+    command = f"cat {file_path} 2>/dev/null || type {file_path} 2>nul || echo 'File not found'"
+    timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
+
+    if target_type == "ssh":
+        results = _orchestrate_ssh(ids, command, timeout)
+    else:
+        results = _orchestrate_shells(ids, command, timeout)
+
+    return jsonify({"success": True, "results": results})
+
+
+@main_bp.route("/api/orchestrate/file-list", methods=["POST"])
+@login_required
+def orchestrate_file_list():
+    """List files in a directory on selected hosts/shells.
+
+    Request JSON: {"type": "ssh" | "shell", "ids": [1, 2, 3], "path": "/tmp"}
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "Request body required"}), 400
+
+    target_type = data.get("type", "shell")
+    ids = data.get("ids", [])
+    dir_path = data.get("path", "/tmp").strip()
+    if not ids:
+        return jsonify({"success": False, "error": "No IDs provided"}), 400
+
+    command = f"ls -la {dir_path} 2>/dev/null || dir {dir_path} 2>nul"
+    timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
+
+    if target_type == "ssh":
+        results = _orchestrate_ssh(ids, command, timeout)
+    else:
+        results = _orchestrate_shells(ids, command, timeout)
+
+    return jsonify({"success": True, "results": results})
+
+
+@main_bp.route("/api/orchestrate/cron-jobs", methods=["POST"])
+@login_required
+def orchestrate_cron_jobs():
+    """Get scheduled tasks/cron jobs from selected hosts/shells.
+
+    Request JSON: {"type": "ssh" | "shell", "ids": [1, 2, 3]}
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "Request body required"}), 400
+
+    target_type = data.get("type", "shell")
+    ids = data.get("ids", [])
+    if not ids:
+        return jsonify({"success": False, "error": "No IDs provided"}), 400
+
+    command = "echo '===USER_CRONTAB==='; crontab -l 2>/dev/null || echo 'No crontab'; echo '===SYSTEM_CRON==='; ls -la /etc/cron.d/ 2>/dev/null; cat /etc/crontab 2>/dev/null || schtasks /query 2>nul"
+    timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
+
+    if target_type == "ssh":
+        results = _orchestrate_ssh(ids, command, timeout)
+    else:
+        results = _orchestrate_shells(ids, command, timeout)
+
+    return jsonify({"success": True, "results": results})
+
+
+@main_bp.route("/api/orchestrate/env-info", methods=["POST"])
+@login_required
+def orchestrate_env_info():
+    """Get environment variables from selected hosts/shells.
+
+    Request JSON: {"type": "ssh" | "shell", "ids": [1, 2, 3]}
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "Request body required"}), 400
+
+    target_type = data.get("type", "shell")
+    ids = data.get("ids", [])
+    if not ids:
+        return jsonify({"success": False, "error": "No IDs provided"}), 400
+
+    command = "env 2>/dev/null || set 2>nul"
+    timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
+
+    if target_type == "ssh":
+        results = _orchestrate_ssh(ids, command, timeout)
+    else:
+        results = _orchestrate_shells(ids, command, timeout)
+
+    return jsonify({"success": True, "results": results})
+
+
+@main_bp.route("/api/orchestrate/security-check", methods=["POST"])
+@login_required
+def orchestrate_security_check():
+    """Run basic security checks on selected hosts/shells.
+
+    Request JSON: {"type": "ssh" | "shell", "ids": [1, 2, 3]}
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "Request body required"}), 400
+
+    target_type = data.get("type", "shell")
+    ids = data.get("ids", [])
+    if not ids:
+        return jsonify({"success": False, "error": "No IDs provided"}), 400
+
+    command = (
+        "echo '===SUID_FILES==='; find / -perm -4000 -type f 2>/dev/null | head -20; "
+        "echo '===WRITABLE_DIRS==='; find / -writable -type d 2>/dev/null | head -20; "
+        "echo '===OPEN_PORTS==='; ss -tuln 2>/dev/null || netstat -tuln 2>/dev/null; "
+        "echo '===FIREWALL==='; iptables -L -n 2>/dev/null || ufw status 2>/dev/null || netsh advfirewall show allprofiles 2>nul; "
+        "echo '===SSH_CONFIG==='; cat /etc/ssh/sshd_config 2>/dev/null | grep -v '^#' | grep -v '^$' | head -20"
+    )
+    timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
+
+    if target_type == "ssh":
+        results = _orchestrate_ssh(ids, command, timeout)
+    else:
+        results = _orchestrate_shells(ids, command, timeout)
+
+    return jsonify({"success": True, "results": results})
+
+
+@main_bp.route("/api/orchestrate/package-list", methods=["POST"])
+@login_required
+def orchestrate_package_list():
+    """List installed packages on selected hosts/shells.
+
+    Request JSON: {"type": "ssh" | "shell", "ids": [1, 2, 3]}
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "Request body required"}), 400
+
+    target_type = data.get("type", "shell")
+    ids = data.get("ids", [])
+    if not ids:
+        return jsonify({"success": False, "error": "No IDs provided"}), 400
+
+    command = "dpkg -l 2>/dev/null | head -50 || rpm -qa 2>/dev/null | head -50 || apk list --installed 2>/dev/null | head -50 || wmic product get name 2>nul"
+    timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
+
+    if target_type == "ssh":
+        results = _orchestrate_ssh(ids, command, timeout)
+    else:
+        results = _orchestrate_shells(ids, command, timeout)
+
+    return jsonify({"success": True, "results": results})

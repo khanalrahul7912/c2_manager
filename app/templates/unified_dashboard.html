@@ -128,10 +128,10 @@
 <div class="tabs-container">
   <div class="tabs">
     <button class="tab {% if view_type == 'ssh' %}active{% endif %}" onclick="switchTab('ssh')">
-      🖥️ SSH Hosts ({{ ssh_total }})
+      🖥️ SSH Shell ({{ ssh_total }})
     </button>
     <button class="tab {% if view_type == 'shells' %}active{% endif %}" onclick="switchTab('shells')">
-      🔌 Reverse Shells ({{ shells_total }})
+      🔌 Reverse Shell ({{ shells_total }})
     </button>
   </div>
 
@@ -164,13 +164,18 @@
         <button class="btn" onclick="bulkCheckLiveness('ssh')">✓ Check Liveness</button>
         <button class="btn" onclick="bulkChangeGroup('ssh')">📁 Change Group</button>
         <button class="btn" onclick="bulkRename('ssh')">✏️ Rename</button>
+        <button class="btn" onclick="runOrchestration('ssh', 'system-info')">📊 System Info</button>
+        <button class="btn" onclick="runOrchestration('ssh', 'network-info')">🌐 Network</button>
+        <button class="btn" onclick="runOrchestration('ssh', 'process-list')">⚙️ Processes</button>
+        <button class="btn" onclick="runOrchestration('ssh', 'user-info')">👤 Users</button>
+        <button class="btn" onclick="runOrchestration('ssh', 'service-status')">🔧 Services</button>
         <button class="btn ghost" onclick="bulkDelete('ssh')" style="background: #f44336; color: white;">🗑️ Delete</button>
         <button class="btn ghost" onclick="clearSelection('ssh')">✖ Clear</button>
       </div>
     </div>
 
     <div class="card-header">
-      <h2>SSH Hosts</h2>
+      <h2>SSH Shell</h2>
       <div class="toolbar">
         {% if current_user.role == 'admin' %}
         <a class="btn" href="{{ url_for('main.create_host') }}">➕ Add Host</a>
@@ -270,17 +275,22 @@
         <button class="btn" onclick="bulkCheckLiveness('shells')">✓ Check Liveness</button>
         <button class="btn" onclick="bulkChangeGroup('shells')">📁 Change Group</button>
         <button class="btn" onclick="bulkRename('shells')">✏️ Rename</button>
+        <button class="btn" onclick="runOrchestration('shells', 'system-info')">📊 System Info</button>
+        <button class="btn" onclick="runOrchestration('shells', 'network-info')">🌐 Network</button>
+        <button class="btn" onclick="runOrchestration('shells', 'process-list')">⚙️ Processes</button>
+        <button class="btn" onclick="runOrchestration('shells', 'user-info')">👤 Users</button>
+        <button class="btn" onclick="runOrchestration('shells', 'service-status')">🔧 Services</button>
         <button class="btn ghost" onclick="bulkDelete('shells')" style="background: #f44336; color: white;">🗑️ Delete</button>
         <button class="btn ghost" onclick="clearSelection('shells')">✖ Clear</button>
       </div>
     </div>
 
     <div class="card-header">
-      <h2>Reverse Shells</h2>
+      <h2>Reverse Shell</h2>
       <div class="toolbar">
         <button id="refresh-btn" class="btn ghost" onclick="location.reload()">🔄 Refresh</button>
         <button id="auto-refresh-toggle" class="btn ghost" data-enabled="false" onclick="toggleAutoRefresh()">⏰ Auto-Refresh: OFF</button>
-        <a class="btn ghost" href="{{ url_for('main.bulk_shell_operations') }}">⚡ Bulk Command</a>
+        <a class="btn ghost" href="{{ url_for('main.bulk_operations') }}">⚡ Bulk Command</a>
         <button class="btn ghost" onclick="selectAll('shells')">☑️ Select All</button>
       </div>
     </div>
@@ -602,5 +612,88 @@ function toggleAutoRefresh() {
     btn.innerHTML = '⏰ Auto-Refresh: ON';
   }
 }
+
+// Orchestration functions
+function runOrchestration(type, action) {
+  const ids = getSelectedIds(type);
+  if (ids.length === 0) {
+    alert('Please select items first');
+    return;
+  }
+
+  const apiType = type === 'ssh' ? 'ssh' : 'shell';
+  let extraParams = {};
+
+  if (action === 'service-status') {
+    const service = prompt('Enter service name (leave empty for all running services):');
+    if (service !== null) {
+      extraParams.service = service;
+    }
+  } else if (action === 'file-read') {
+    const path = prompt('Enter file path to read:');
+    if (!path) return;
+    extraParams.path = path;
+  } else if (action === 'file-list') {
+    const path = prompt('Enter directory path to list:', '/tmp');
+    if (!path) return;
+    extraParams.path = path;
+  }
+
+  const body = { type: apiType, ids: ids, ...extraParams };
+
+  // Show loading
+  const resultsDiv = document.getElementById('orchestration-results');
+  const resultsContent = document.getElementById('orchestration-content');
+  resultsDiv.style.display = 'block';
+  resultsContent.innerHTML = '<p>⏳ Running orchestration...</p>';
+
+  fetch(`/api/orchestrate/${action}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (!data.success) {
+      resultsContent.innerHTML = `<p style="color: red;">Error: ${data.error}</p>`;
+      return;
+    }
+
+    let html = `<h3>${action.replace('-', ' ').toUpperCase()} Results</h3>`;
+    data.results.forEach(result => {
+      const name = result.host_name || result.shell_name || 'Unknown';
+      const status = result.success ? '✅' : '❌';
+      const output = result.stdout || result.output || result.stderr || 'No output';
+      html += `<div style="margin: 1rem 0; padding: 1rem; background: ${result.success ? '#e8f5e9' : '#ffebee'}; border-radius: 8px;">
+        <strong>${status} ${name}</strong>
+        <pre style="margin-top: 0.5rem; max-height: 300px; overflow: auto; white-space: pre-wrap;">${output}</pre>
+      </div>`;
+    });
+    resultsContent.innerHTML = html;
+  })
+  .catch(error => {
+    resultsContent.innerHTML = `<p style="color: red;">Error: ${error}</p>`;
+  });
+}
+</script>
+
+<!-- Orchestration Results Panel -->
+<div id="orchestration-results" style="display: none; position: fixed; top: 10%; left: 10%; right: 10%; bottom: 10%; background: white; border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.3); z-index: 1000; overflow: hidden;">
+  <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem 1.5rem; background: #f5f5f5; border-bottom: 1px solid #ddd;">
+    <h3 style="margin: 0;">Orchestration Results</h3>
+    <button class="btn ghost" onclick="document.getElementById('orchestration-results').style.display='none'" style="padding: 0.3rem 0.6rem;">✖ Close</button>
+  </div>
+  <div id="orchestration-content" style="padding: 1.5rem; overflow-y: auto; max-height: calc(100% - 60px);"></div>
+</div>
+<div id="orchestration-backdrop" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 999;" onclick="document.getElementById('orchestration-results').style.display='none'; this.style.display='none';"></div>
+
+<script>
+// Show/hide backdrop with results panel
+const resultsPanel = document.getElementById('orchestration-results');
+const backdrop = document.getElementById('orchestration-backdrop');
+const observer = new MutationObserver(() => {
+  backdrop.style.display = resultsPanel.style.display;
+});
+observer.observe(resultsPanel, { attributes: true, attributeFilter: ['style'] });
 </script>
 {% endblock %}

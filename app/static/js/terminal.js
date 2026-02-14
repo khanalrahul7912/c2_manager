@@ -200,7 +200,7 @@
       btn.textContent = '✓ Copied!';
       setTimeout(function () { btn.textContent = orig; }, 1500);
     }).catch(function () {
-      var ta = document.createElement('textarea');
+      const ta = document.createElement('textarea');
       ta.value = text;
       ta.style.position = 'fixed';
       ta.style.opacity = '0';

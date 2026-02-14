@@ -54,7 +54,6 @@
   </div>
 
   <form class="term-inputbar" id="term-form" autocomplete="off">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <span class="prompt-label">{{ shell.shell_user or 'shell' }}@{{ shell.hostname or shell.address }}$</span>
     <input type="text" id="term-input" placeholder="Type a command…" {% if not is_connected %}disabled{% endif %} autocomplete="off" autofocus>
   </form>

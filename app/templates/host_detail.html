@@ -44,7 +44,6 @@
   </div>
 
   <form class="term-inputbar" id="term-form" autocomplete="off">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <span class="prompt-label">{{ host.username }}@{{ host.address }}$</span>
     <input type="text" id="term-input" placeholder="Type a command…" autocomplete="off" autofocus>
   </form>

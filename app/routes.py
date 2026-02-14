@@ -29,8 +29,6 @@ auth_bp = Blueprint("auth", __name__)
 main_bp = Blueprint("main", __name__)
 
 
-
-
 PAGE_SIZE_DEFAULT = 15
 
 
@@ -274,7 +272,19 @@ def _build_jump(host: Host) -> SSHEndpoint | None:
 
 
 def _run_command_for_host(host: Host, command: str, timeout: int, target: SSHEndpoint, jump_host: SSHEndpoint | None):
-    """Run SSH command for a host. Target and jump_host must be built before calling."""
+    """
+    Run SSH command for a host. Target and jump_host must be built before calling.
+    
+    Args:
+        host: The Host object for which to run the command
+        command: The shell command to execute
+        timeout: Command execution timeout in seconds
+        target: Pre-built SSHEndpoint for the target host
+        jump_host: Pre-built SSHEndpoint for jump host, or None if not using jump host
+        
+    Returns:
+        tuple: (host.id, SSHCommandResult)
+    """
     return host.id, run_ssh_command(
         target=target,
         command=command,
@@ -867,7 +877,6 @@ def execute_command_api(session_id: str):
         'execution_time': execution_time,
         'execution_id': execution.id
     })
-
 
 
 # Enhanced Export Routes

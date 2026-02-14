@@ -63,7 +63,12 @@
   </article>
 
   <article class="card">
-    <h2>Recent command executions</h2>
+    <div class="card-header">
+      <h2>Recent command executions</h2>
+      <div class="toolbar">
+        <a class="btn ghost" href="{{ url_for('main.export_ssh_executions') }}">Export CSV</a>
+      </div>
+    </div>
     <table>
       <thead><tr><th>Host</th><th>User</th><th>Status</th><th>Start</th><th>Command</th></tr></thead>
       <tbody>

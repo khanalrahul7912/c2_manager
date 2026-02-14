@@ -12,6 +12,7 @@ from flask import Flask
 
 from app.extensions import db
 from app.models import ReverseShell, ShellExecution
+from app.utils import clean_shell_output
 
 
 class ShellConnection:
@@ -65,7 +66,10 @@ class ShellConnection:
                             break
                         continue
                 
-                return output.decode('utf-8', errors='replace')
+                output = output.decode('utf-8', errors='replace')
+                # Clean ANSI escape codes from output
+                output = clean_shell_output(output)
+                return output
             except Exception as exc:
                 self.is_active = False
                 return f"Error: {exc}"
@@ -161,27 +165,69 @@ class ShellListener:
         shell_id = None
         try:
             with self.app.app_context():
-                # Try to get system info
+                # Validate that this is actually a shell, not just a TCP connection
                 conn.settimeout(5)
+                
+                # Send shell detection commands
+                test_commands = [
+                    b'echo "SHELL_VERIFY_TOKEN"\n',
+                    b'whoami\n',
+                    b'id\n'
+                ]
+                
+                is_valid_shell = False
+                
+                for cmd in test_commands:
+                    try:
+                        conn.sendall(cmd)
+                        time.sleep(0.1)  # Short wait for response
+                        response = conn.recv(1024)
+                        
+                        # Check if we got shell-like response
+                        if response and len(response) > 0:
+                            decoded = response.decode('utf-8', errors='ignore')
+                            
+                            # Look for shell prompt indicators or command output
+                            shell_indicators = ['$', '#', '>', 'SHELL_VERIFY_TOKEN', 'uid=', 'gid=']
+                            if any(indicator in decoded for indicator in shell_indicators):
+                                is_valid_shell = True
+                                break
+                    except Exception:
+                        continue
+                
+                if not is_valid_shell:
+                    # Not a valid shell, reject connection
+                    conn.close()
+                    print(f"[!] Rejected non-shell connection from {ip}:{port}")
+                    return
+                
+                # Try to get system info
                 try:
                     # Send info gathering commands
                     hostname = ""
                     platform = ""
                     shell_user = ""
+                    default_hostname = f"host-{ip}"
                     
                     # Try to get hostname
                     conn.sendall(b'hostname\n')
                     time.sleep(0.5)
                     try:
-                        hostname = conn.recv(1024).decode('utf-8', errors='replace').strip()
+                        hostname_raw = conn.recv(1024).decode('utf-8', errors='replace')
+                        hostname = clean_shell_output(hostname_raw).strip()
+                        if not hostname:
+                            hostname = default_hostname
                     except:
-                        hostname = f"host-{ip}"
+                        hostname = default_hostname
                     
                     # Try to get username
                     conn.sendall(b'whoami 2>/dev/null || echo %USERNAME%\n')
                     time.sleep(0.5)
                     try:
-                        shell_user = conn.recv(1024).decode('utf-8', errors='replace').strip()
+                        shell_user_raw = conn.recv(1024).decode('utf-8', errors='replace')
+                        shell_user = clean_shell_output(shell_user_raw).strip()
+                        if not shell_user:
+                            shell_user = "unknown"
                     except:
                         shell_user = "unknown"
                     
@@ -189,7 +235,8 @@ class ShellListener:
                     conn.sendall(b'uname -a 2>/dev/null || ver\n')
                     time.sleep(0.5)
                     try:
-                        os_info = conn.recv(2048).decode('utf-8', errors='replace').strip()
+                        os_info_raw = conn.recv(2048).decode('utf-8', errors='replace')
+                        os_info = clean_shell_output(os_info_raw).strip()
                         if 'Linux' in os_info:
                             platform = 'Linux'
                         elif 'Darwin' in os_info:
@@ -202,7 +249,7 @@ class ShellListener:
                         platform = "unknown"
                         
                 except Exception:
-                    hostname = f"host-{ip}"
+                    hostname = default_hostname
                     platform = "Unknown"
                     shell_user = "unknown"
                 

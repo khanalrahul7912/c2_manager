@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import socket
 from pathlib import Path
 
 from sqlalchemy.engine import make_url
@@ -29,6 +30,45 @@ def _database_uri() -> str:
     return raw
 
 
+def get_public_ip() -> str | None:
+    """
+    Get public IP address.
+    
+    Returns:
+        Public IP address or None if unavailable
+    """
+    try:
+        import requests
+        response = requests.get('https://api.ipify.org?format=json', timeout=5)
+        return response.json()['ip']
+    except Exception:
+        try:
+            # Fallback method
+            import requests
+            response = requests.get('https://ifconfig.me/ip', timeout=5)
+            return response.text.strip()
+        except Exception:
+            return None
+
+
+def get_local_ip() -> str:
+    """
+    Get local IP address.
+    
+    Returns:
+        Local IP address or '127.0.0.1' if unavailable
+    """
+    try:
+        # Create a socket to determine local IP
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+        return local_ip
+    except Exception:
+        return "127.0.0.1"
+
+
 class Config:
     SECRET_KEY = os.getenv("SECRET_KEY", "replace-me-in-production")
     SQLALCHEMY_DATABASE_URI = _database_uri()
@@ -46,6 +86,12 @@ class Config:
     REVERSE_SHELL_TIMEOUT = int(os.getenv("REVERSE_SHELL_TIMEOUT", "30"))
     MAX_SHELL_SESSIONS = int(os.getenv("MAX_SHELL_SESSIONS", "100"))
     SHELL_COMMAND_TIMEOUT = int(os.getenv("SHELL_COMMAND_TIMEOUT", "30"))
+    
+    # Dynamic IP Configuration
+    REVERSE_SHELL_PUBLIC_IP = os.getenv("REVERSE_SHELL_PUBLIC_IP") or get_public_ip()
+    REVERSE_SHELL_LOCAL_IP = os.getenv("REVERSE_SHELL_LOCAL_IP") or get_local_ip()
+    # Which IP to show in connection instructions: 'public', 'local', or specific IP
+    REVERSE_SHELL_DISPLAY_IP = os.getenv("REVERSE_SHELL_DISPLAY_IP", "public")
     
     # SSH Configuration
     MAX_SSH_WORKERS = int(os.getenv("MAX_SSH_WORKERS", "8"))

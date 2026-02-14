@@ -446,28 +446,100 @@ def host_detail(host_id: int):
 @login_required
 def shells_dashboard():
     """Dashboard for reverse shell connections."""
-    group = request.args.get("group", "").strip()
+    # Get filter parameters
+    group_filter = request.args.get("group", "").strip()
+    platform_filter = request.args.get("platform", "").strip()
+    status_filter = request.args.get("status", "").strip()
+    search_query = request.args.get("search", "").strip()
     page = _page_arg("page")
     
-    shell_query = ReverseShell.query.order_by(ReverseShell.last_seen.desc().nullslast(), ReverseShell.name.asc())
-    if group:
-        shell_query = shell_query.filter(ReverseShell.group_name == group)
+    # Base query
+    shell_query = ReverseShell.query
     
-    shells_pagination = shell_query.paginate(page=page, per_page=PAGE_SIZE_DEFAULT, error_out=False)
+    # Apply filters
+    if group_filter:
+        shell_query = shell_query.filter(ReverseShell.group_name == group_filter)
     
-    groups = [value[0] for value in db.session.query(ReverseShell.group_name).distinct().all() if value[0]]
+    if platform_filter:
+        shell_query = shell_query.filter(ReverseShell.platform == platform_filter)
     
-    # Get active shells from listener
+    if search_query:
+        search_pattern = f'%{search_query}%'
+        shell_query = shell_query.filter(
+            db.or_(
+                ReverseShell.address.like(search_pattern),
+                ReverseShell.hostname.like(search_pattern),
+                ReverseShell.shell_user.like(search_pattern),
+                ReverseShell.name.like(search_pattern)
+            )
+        )
+    
+    # Get active shells for status filtering
     listener = get_listener(current_app._get_current_object())
-    active_shell_ids = listener.get_active_shells()
+    active_shell_ids = set(listener.get_active_shells())
+    
+    # Order by last seen
+    shell_query = shell_query.order_by(ReverseShell.last_seen.desc().nullslast(), ReverseShell.name.asc())
+    
+    # Fetch all shells matching the criteria
+    all_shells = shell_query.all()
+    
+    # Apply status filter based on active connections
+    if status_filter == "active":
+        shells = [s for s in all_shells if s.id in active_shell_ids]
+    elif status_filter == "disconnected":
+        shells = [s for s in all_shells if s.id not in active_shell_ids]
+    else:
+        shells = all_shells
+    
+    # Manual pagination
+    total_shells = len(shells)
+    shells_per_page = PAGE_SIZE_DEFAULT
+    total_pages = max(1, (total_shells + shells_per_page - 1) // shells_per_page)
+    page = min(page, total_pages)
+    start_idx = (page - 1) * shells_per_page
+    end_idx = start_idx + shells_per_page
+    paginated_shells = shells[start_idx:end_idx]
+    
+    # Get unique values for filter dropdowns
+    all_groups = sorted([g[0] for g in db.session.query(ReverseShell.group_name).distinct().all() if g[0]])
+    all_platforms = sorted([p[0] for p in db.session.query(ReverseShell.platform).distinct().all() if p[0]])
+    
+    # Get connection IP based on config
+    display_mode = current_app.config.get('REVERSE_SHELL_DISPLAY_IP', 'public')
+    
+    if display_mode == 'public':
+        display_ip = current_app.config.get('REVERSE_SHELL_PUBLIC_IP')
+    elif display_mode == 'local':
+        display_ip = current_app.config.get('REVERSE_SHELL_LOCAL_IP')
+    else:
+        display_ip = display_mode  # Use as-is if specific IP provided
+    
+    # Also provide both IPs for flexibility
+    public_ip = current_app.config.get('REVERSE_SHELL_PUBLIC_IP')
+    local_ip = current_app.config.get('REVERSE_SHELL_LOCAL_IP')
+    shell_port = current_app.config.get('REVERSE_SHELL_PORT', 5000)
     
     return render_template(
         "shells_dashboard.html",
-        shells=shells_pagination.items,
-        shells_pagination=shells_pagination,
-        groups=sorted(groups),
-        selected_group=group,
+        shells=paginated_shells,
+        page=page,
+        total_pages=total_pages,
+        has_prev=page > 1,
+        has_next=page < total_pages,
+        all_groups=all_groups,
+        all_platforms=all_platforms,
+        current_filters={
+            'group': group_filter,
+            'platform': platform_filter,
+            'status': status_filter,
+            'search': search_query
+        },
         active_shell_ids=active_shell_ids,
+        connection_ip=display_ip,
+        public_ip=public_ip,
+        local_ip=local_ip,
+        shell_port=shell_port,
     )
 
 

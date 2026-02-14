@@ -270,10 +270,10 @@ def _run_command_for_host(host: Host, command: str, timeout: int):
     )
 
 
-def _create_execution(host: Host, command: str) -> CommandExecution:
+def _create_execution(host: Host, command: str, user_id: int) -> CommandExecution:
     execution = CommandExecution(
         host_id=host.id,
-        user_id=current_user.id,
+        user_id=user_id,
         command=command,
         status="running",
     )
@@ -282,13 +282,17 @@ def _create_execution(host: Host, command: str) -> CommandExecution:
     return execution
 
 
-def _complete_execution(execution: CommandExecution, result) -> None:
-    execution.stdout = result.stdout
-    execution.stderr = result.stderr
-    execution.return_code = result.return_code
-    execution.status = "success" if result.return_code == 0 else "failed"
-    execution.completed_at = datetime.utcnow()
-    db.session.commit()
+def _complete_execution(app, execution_id: int, result) -> None:
+    """Complete an execution with results. Must be called with app context."""
+    with app.app_context():
+        execution = db.session.get(CommandExecution, execution_id)
+        if execution:
+            execution.stdout = result.stdout
+            execution.stderr = result.stderr
+            execution.return_code = result.return_code
+            execution.status = "success" if result.return_code == 0 else "failed"
+            execution.completed_at = datetime.utcnow()
+            db.session.commit()
 
 
 @main_bp.route("/operations/bulk", methods=["GET", "POST"])
@@ -312,7 +316,9 @@ def bulk_operations():
         failure_count = 0
 
         timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
-        execution_map = {host.id: _create_execution(host, command) for host in selected_hosts}
+        user_id = current_user.id  # Get user_id before thread pool
+        app = current_app._get_current_object()  # Get app instance for thread context
+        execution_map = {host.id: _create_execution(host, command, user_id) for host in selected_hosts}
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
@@ -323,17 +329,23 @@ def bulk_operations():
                 execution = execution_map[host.id]
                 try:
                     _, result = future.result()
-                    _complete_execution(execution, result)
-                    if execution.status == "success":
-                        success_count += 1
-                    else:
-                        failure_count += 1
+                    _complete_execution(app, execution.id, result)
+                    # Re-query to get updated status
+                    with app.app_context():
+                        execution = db.session.get(CommandExecution, execution.id)
+                        if execution.status == "success":
+                            success_count += 1
+                        else:
+                            failure_count += 1
                 except Exception as exc:  # pragma: no cover
                     failure_count += 1
-                    execution.status = "failed"
-                    execution.stderr = f"Unexpected error during execution: {exc}"
-                    execution.completed_at = datetime.utcnow()
-                    db.session.commit()
+                    with app.app_context():
+                        execution = db.session.get(CommandExecution, execution.id)
+                        if execution:
+                            execution.status = "failed"
+                            execution.stderr = f"Unexpected error during execution: {exc}"
+                            execution.completed_at = datetime.utcnow()
+                            db.session.commit()
                     flash(f"{host.name}: unexpected error during execution: {exc}", "danger")
 
         flash(f"Bulk execution finished: {success_count} success, {failure_count} failed.", "info")
@@ -359,9 +371,12 @@ def host_detail(host_id: int):
 
     if form.validate_on_submit():
         command = form.command.data.strip()
-        execution = _create_execution(host, command)
+        execution = _create_execution(host, command, current_user.id)
         result = _run_command_for_host(host, command, current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30))[1]
-        _complete_execution(execution, result)
+        app = current_app._get_current_object()
+        _complete_execution(app, execution.id, result)
+        # Re-query execution to get updated status
+        execution = db.session.get(CommandExecution, execution.id)
         flash(f"Command completed with status {execution.status}.", "info")
         return redirect(url_for("main.host_detail", host_id=host.id))
 

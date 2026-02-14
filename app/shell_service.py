@@ -93,7 +93,7 @@ class ShellConnection:
                         self.conn.close()
                     except Exception:
                         pass
-                    notice = "\n\n⚠️ Command timed out after {}s. Session closed – it will reconnect automatically.".format(timeout)
+                    notice = f"\n\n⚠️ Command timed out after {timeout}s. Session closed – it will reconnect automatically."
                     return output_str + notice
 
                 return output_str

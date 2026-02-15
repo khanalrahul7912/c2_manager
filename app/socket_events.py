@@ -21,9 +21,21 @@ from app.security import decrypt_secret
 from app.shell_service import get_listener
 from app.ssh_service import SSHEndpoint, _connect_client
 
+# Default terminal dimensions for reverse shells
+DEFAULT_TERM_COLS = 200
+DEFAULT_TERM_ROWS = 50
+
 # Active WebSocket terminal sessions keyed by Flask-SocketIO session id (request.sid)
 _ws_sessions: Dict[str, dict] = {}
 _ws_lock = threading.Lock()
+
+
+def _send_stty(conn_socket, rows: int, cols: int) -> None:
+    """Send stty terminal resize command to a reverse shell socket."""
+    try:
+        conn_socket.sendall(f"stty rows {rows} cols {cols} 2>/dev/null\n".encode("utf-8"))
+    except OSError:
+        pass
 
 
 def register_events(sio: SocketIO) -> None:
@@ -59,12 +71,9 @@ def register_events(sio: SocketIO) -> None:
         conn.ws_attached = True
 
         # Apply terminal size from the client if provided
-        cols = data.get("cols", 200)
-        rows = data.get("rows", 50)
-        try:
-            conn.conn.sendall(f"stty rows {rows} cols {cols} 2>/dev/null\n".encode("utf-8"))
-        except OSError:
-            pass
+        cols = data.get("cols", DEFAULT_TERM_COLS)
+        rows = data.get("rows", DEFAULT_TERM_ROWS)
+        _send_stty(conn.conn, rows, cols)
 
         emit("shell_status", {"connected": True})
         emit("shell_output", {"data": "\r\n"})
@@ -171,8 +180,8 @@ def register_events(sio: SocketIO) -> None:
             session = _ws_sessions.get(sid)
         if not session:
             return
-        cols = data.get("cols", 200)
-        rows = data.get("rows", 50)
+        cols = data.get("cols", DEFAULT_TERM_COLS)
+        rows = data.get("rows", DEFAULT_TERM_ROWS)
         shell_id = session.get("shell_id")
         if not shell_id:
             return
@@ -181,10 +190,7 @@ def register_events(sio: SocketIO) -> None:
         conn_obj = listener.connections.get(shell_id)
         if not conn_obj or not conn_obj.is_active:
             return
-        try:
-            conn_obj.conn.sendall(f"stty rows {rows} cols {cols} 2>/dev/null\n".encode("utf-8"))
-        except OSError:
-            pass
+        _send_stty(conn_obj.conn, rows, cols)
 
     @sio.on("reverse_disconnect_host")
     def on_reverse_disconnect_host(data: dict) -> None:

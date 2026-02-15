@@ -213,7 +213,7 @@
             return false;
         }
         /* Ctrl+Shift+1-9 → switch to tab N */
-        const n = parseInt(e.key);
+        const n = parseInt(e.key, 10);
         if (n >= 1 && n <= 9 && n <= tabs.length) {
           e.preventDefault();
           switchTab(tabs[n - 1].id);

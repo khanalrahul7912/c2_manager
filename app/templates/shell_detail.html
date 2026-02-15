@@ -8,6 +8,7 @@
       {% if current_user.role == 'admin' %}
       <a href="{{ url_for('main.edit_shell', shell_id=shell.id) }}" class="btn ghost">Edit</a>
       {% endif %}
+      <button type="button" class="btn ghost" id="btn-disconnect" title="Forcefully disconnect this shell">⏏ Disconnect</button>
       <a href="{{ url_for('main.shells_dashboard') }}" class="btn ghost">Back to Shells</a>
     </div>
   </div>
@@ -25,11 +26,11 @@
   <span class="warn-icon">⚠️</span>
   <span class="warn-text">
     <strong>Shell is disconnected</strong>
-    <small>Commands cannot be executed. The terminal will resume automatically when the shell reconnects.</small>
+    <small>The terminal will resume automatically when the shell reconnects.</small>
   </span>
 </div>
 
-{# Interactive terminal #}
+{# Real-time xterm.js terminal #}
 <div class="term-wrap">
   <div class="term-titlebar">
     <div class="term-dots"><span class="d-r"></span><span class="d-y"></span><span class="d-g"></span></div>
@@ -39,38 +40,201 @@
       <span id="term-status-text">{% if is_connected %}Connected{% else %}Disconnected{% endif %}</span>
     </span>
     <div class="term-actions">
-      <button type="button" onclick="document.getElementById('term-body').innerHTML=''" title="Clear (Ctrl+L)">🧹 Clear</button>
-      <button type="button" onclick="copyTerminalOutput(this)" title="Copy all output">📋 Copy</button>
+      <button type="button" id="btn-reconnect" title="Reconnect terminal">🔄 Reconnect</button>
+      <button type="button" id="btn-copy" title="Copy terminal output">📋 Copy</button>
     </div>
   </div>
-
-  <div class="term-body" id="term-body">
-    {# Render recent command history (newest first, reversed to oldest-first display) #}
-    {% for run in executions | reverse %}
-    <div><span class="term-prompt-label">{{ shell.shell_user or 'shell' }}@{{ shell.hostname or shell.address }}$</span> <span class="term-cmd">{{ run.command }}</span></div>
-    {% if run.output %}<div><span class="term-stdout">{{ run.output }}</span></div>{% endif %}
-    {% if run.stderr %}<div><span class="term-stderr">{{ run.stderr }}</span></div>{% endif %}
-    {% endfor %}
-  </div>
-
-  <form class="term-inputbar" id="term-form" autocomplete="off">
-    <span class="prompt-label">{{ shell.shell_user or 'shell' }}@{{ shell.hostname or shell.address }}$</span>
-    <input type="text" id="term-input" placeholder="Type a command…" {% if not is_connected %}disabled{% endif %} autocomplete="off" autofocus>
-  </form>
+  <div id="xterm-container" style="background:#1a1b26;"></div>
 </div>
 
+{% if old_executions %}
+<section class="card" style="margin-top:1rem;">
+  <div class="card-header">
+    <h3>Command History (older sessions)</h3>
+  </div>
+  <div class="terminal-history">
+    <div class="terminal-history-body">
+      {% for run in old_executions %}
+      <div class="terminal-entry">
+        <div class="terminal-entry-meta">
+          <span class="pill {{ run.status }}">{{ run.status }}</span>
+          <span>{{ run.started_at.strftime('%Y-%m-%d %H:%M:%S') }}</span>
+        </div>
+        <div class="terminal-prompt">{{ run.command }}</div>
+        {% if run.output %}<div class="terminal-stdout">{{ run.output }}</div>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+{% endif %}
+
+{# xterm.js local vendor files #}
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/xterm.css') }}">
+<script src="{{ url_for('static', filename='vendor/xterm.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/addon-fit.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/addon-web-links.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/socket.io.min.js') }}"></script>
 <script>
-  window.TERMINAL_CONFIG = {
-    executeUrl:   '{{ url_for("main.shell_execute_api", shell_id=shell.id) }}',
-    statusUrl:    '{{ url_for("main.shell_status_api", shell_id=shell.id) }}',
-    historyUrl:   '{{ url_for("main.reverse_history_api", shell_id=shell.id) }}',
-    shellType:    'reverse',
-    promptLabel:  '{{ shell.shell_user or "shell" }}@{{ shell.hostname or shell.address }}$',
-    isConnected:  {{ 'true' if is_connected else 'false' }},
-    csrfToken:    '{{ csrf_token() }}',
-    totalHistory: {{ total_history }},
-    loadedHistory: {{ loaded_history }},
-  };
+(function() {
+  'use strict';
+
+  const SHELL_ID = {{ shell.id }};
+  const IS_CONNECTED = {{ 'true' if is_connected else 'false' }};
+
+  /* ── xterm.js setup ── */
+  const term = new window.Terminal({
+    cursorBlink: true,
+    fontSize: 14,
+    fontFamily: "'SF Mono', Monaco, Menlo, 'Courier New', monospace",
+    theme: {
+      background: '#1a1b26',
+      foreground: '#c0caf5',
+      cursor: '#c0caf5',
+      selectionBackground: '#33467c',
+      black: '#15161e', red: '#f7768e', green: '#9ece6a', yellow: '#e0af68',
+      blue: '#7aa2f7', magenta: '#bb9af7', cyan: '#7dcfff', white: '#a9b1d6',
+    },
+    scrollback: 10000,
+    allowProposedApi: true,
+  });
+
+  const fitAddon = new window.FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  try {
+    const webLinksAddon = new window.WebLinksAddon.WebLinksAddon();
+    term.loadAddon(webLinksAddon);
+  } catch(e) {}
+
+  const container = document.getElementById('xterm-container');
+  term.open(container);
+  fitAddon.fit();
+
+  window.addEventListener('resize', function() { fitAddon.fit(); });
+
+  /* ── Status UI ── */
+  const statusDot = document.getElementById('term-status-dot');
+  const statusText = document.getElementById('term-status-text');
+  const banner = document.getElementById('term-disconnect-banner');
+
+  function setStatus(connected) {
+    if (statusDot) statusDot.className = 'term-dot ' + (connected ? 'online' : 'offline');
+    if (statusText) statusText.textContent = connected ? 'Connected' : 'Disconnected';
+    if (banner) banner.style.display = connected ? 'none' : 'flex';
+  }
+
+  /* ── SocketIO ── */
+  const socket = io({ transports: ['websocket', 'polling'] });
+  let connected = false;
+
+  function connectShell() {
+    socket.emit('reverse_connect', {
+      shell_id: SHELL_ID,
+      cols: term.cols,
+      rows: term.rows,
+    });
+  }
+
+  socket.on('connect', function() {
+    if (IS_CONNECTED || connected) {
+      connectShell();
+    }
+  });
+
+  socket.on('shell_output', function(data) {
+    if (data.data) {
+      term.write(data.data);
+    }
+  });
+
+  socket.on('shell_status', function(data) {
+    connected = data.connected;
+    setStatus(connected);
+    if (connected && !term._initialized) {
+      term._initialized = true;
+    }
+  });
+
+  /* Send user input to shell */
+  term.onData(function(data) {
+    if (connected) {
+      socket.emit('reverse_input', { data: data });
+    }
+  });
+
+  /* Terminal resize */
+  term.onResize(function(size) {
+    socket.emit('reverse_resize', { cols: size.cols, rows: size.rows });
+  });
+
+  /* Initial connect */
+  if (IS_CONNECTED) {
+    connectShell();
+  } else {
+    term.write('\r\n⚠ Shell is disconnected. Waiting for reconnection...\r\n');
+    // Poll for reconnection
+    setInterval(function() {
+      if (!connected) {
+        fetch('{{ url_for("main.shell_status_api", shell_id=shell.id) }}')
+          .then(function(r) { return r.json(); })
+          .then(function(d) {
+            if (d.connected && !connected) {
+              connected = true;
+              setStatus(true);
+              term.write('\r\n✓ Shell reconnected!\r\n');
+              connectShell();
+            }
+          })
+          .catch(function() {});
+      }
+    }, 5000);
+  }
+
+  /* ── Buttons ── */
+  document.getElementById('btn-disconnect').addEventListener('click', function() {
+    if (confirm('Forcefully disconnect this shell?')) {
+      socket.emit('reverse_disconnect_host', { shell_id: SHELL_ID });
+      connected = false;
+      setStatus(false);
+    }
+  });
+
+  document.getElementById('btn-reconnect').addEventListener('click', function() {
+    if (!connected) {
+      fetch('{{ url_for("main.shell_status_api", shell_id=shell.id) }}')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          if (d.connected) {
+            connected = true;
+            setStatus(true);
+            connectShell();
+            term.write('\r\n✓ Reconnected!\r\n');
+          } else {
+            term.write('\r\n⚠ Shell is still disconnected\r\n');
+          }
+        });
+    } else {
+      connectShell();
+      term.write('\r\n✓ Terminal re-attached\r\n');
+    }
+  });
+
+  document.getElementById('btn-copy').addEventListener('click', function() {
+    const text = term.buffer.active.getLine(0) ? (function() {
+      let lines = [];
+      for (let i = 0; i < term.buffer.active.length; i++) {
+        const line = term.buffer.active.getLine(i);
+        if (line) lines.push(line.translateToString(true));
+      }
+      return lines.join('\n');
+    })() : '';
+    navigator.clipboard.writeText(text).then(function() {
+      const btn = document.getElementById('btn-copy');
+      const orig = btn.textContent;
+      btn.textContent = '✓ Copied!';
+      setTimeout(function() { btn.textContent = orig; }, 1500);
+    });
+  });
+})();
 </script>
-<script src="{{ url_for('static', filename='js/terminal.js') }}"></script>
 {% endblock %}

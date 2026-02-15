@@ -500,19 +500,15 @@ def bulk_operations():
 def host_detail(host_id: int):
     host = db.get_or_404(Host, host_id)
 
-    # Load only the most recent 20 executions for inline terminal display
-    initial_limit = 20
-    total_count = CommandExecution.query.filter_by(host_id=host.id).count()
-    executions = CommandExecution.query.filter_by(host_id=host.id).order_by(
+    # Load older command history for the history section below the terminal
+    old_executions = CommandExecution.query.filter_by(host_id=host.id).order_by(
         CommandExecution.started_at.desc()
-    ).limit(initial_limit).all()
+    ).limit(50).all()
 
     return render_template(
         "host_detail.html",
         host=host,
-        executions=executions,
-        total_history=total_count,
-        loaded_history=len(executions),
+        old_executions=old_executions,
     )
 
 
@@ -632,20 +628,16 @@ def shell_detail(shell_id: int):
     listener = get_listener(current_app._get_current_object())
     is_connected = shell_id in listener.get_active_shells()
 
-    # Load only the most recent 20 executions for inline terminal display
-    initial_limit = 20
-    total_count = ShellExecution.query.filter_by(shell_id=shell.id).count()
-    executions = ShellExecution.query.filter_by(shell_id=shell.id).order_by(
+    # Load older command history for the history section below the terminal
+    old_executions = ShellExecution.query.filter_by(shell_id=shell.id).order_by(
         ShellExecution.started_at.desc()
-    ).limit(initial_limit).all()
+    ).limit(50).all()
 
     return render_template(
         "shell_detail.html",
         shell=shell,
         is_connected=is_connected,
-        executions=executions,
-        total_history=total_count,
-        loaded_history=len(executions),
+        old_executions=old_executions,
     )
 
 

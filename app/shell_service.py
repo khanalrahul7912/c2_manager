@@ -24,6 +24,7 @@ class ShellConnection:
         self.shell_id = shell_id
         self.lock = threading.Lock()
         self.is_active = True
+        self.ws_attached = False  # True when a WebSocket terminal is actively reading
         
     def send_command(self, command: str, timeout: int = 120) -> str:
         """Send command to shell and receive output.
@@ -396,6 +397,19 @@ class ShellListener:
                 # Keep connection alive
                 while self.is_running and self.connections.get(shell_id):
                     try:
+                        shell_conn = self.connections.get(shell_id)
+                        # When a WebSocket terminal is attached, skip keepalive
+                        # to avoid interfering with the real-time reader thread.
+                        if shell_conn and shell_conn.ws_attached:
+                            time.sleep(5)
+                            # Still update last_seen
+                            with self.app.app_context():
+                                shell_record = db.session.get(ReverseShell, shell_id)
+                                if shell_record:
+                                    shell_record.last_seen = datetime.utcnow()
+                                    db.session.commit()
+                            continue
+
                         # Use a no-op comment command for keepalive instead
                         # of bare newlines which pollute the shell buffer.
                         conn.settimeout(30)

@@ -605,6 +605,16 @@ code {
   white-space: nowrap;
 }
 
+/* ===== xterm.js container ===== */
+#xterm-container {
+  min-height: 60vh;
+  padding: 4px;
+}
+
+#xterm-container .xterm {
+  padding: 0;
+}
+
 /* ===== Interactive Terminal ===== */
 .term-wrap {
   background: #1a1b26;

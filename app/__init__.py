@@ -5,7 +5,7 @@ import os
 from flask import Flask
 
 from app.config import Config, ProductionConfig
-from app.extensions import csrf, db, login_manager, migrate
+from app.extensions import csrf, db, login_manager, migrate, socketio
 from app.models import User
 from app.routes import auth_bp, main_bp
 from app.shell_service import start_listener
@@ -23,9 +23,14 @@ def create_app() -> Flask:
     migrate.init_app(app, db)
     login_manager.init_app(app)
     csrf.init_app(app)
+    socketio.init_app(app, async_mode="threading", cors_allowed_origins="*")
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(main_bp)
+
+    # Register WebSocket event handlers
+    from app.socket_events import register_events
+    register_events(socketio)
     
     # Start reverse shell listener
     try:

@@ -6,6 +6,7 @@
     <h2>{{ host.name }}</h2>
     <div class="toolbar">
       <a href="{{ url_for('main.edit_host', host_id=host.id) }}" class="btn ghost">Edit</a>
+      <button type="button" class="btn ghost" id="btn-disconnect" title="Close SSH session">⏏ Disconnect</button>
       <a href="{{ url_for('main.unified_dashboard', view='ssh') }}" class="btn ghost">Back to Hosts</a>
     </div>
   </div>
@@ -19,48 +20,180 @@
   </div>
 </section>
 
-{# Interactive terminal #}
+{# Disconnect warning banner (hidden initially) #}
+<div class="term-disconnect-banner" id="term-disconnect-banner" style="display:none">
+  <span class="warn-icon">⚠️</span>
+  <span class="warn-text">
+    <strong>SSH session disconnected</strong>
+    <small>Click "🔄 Reconnect" to start a new session.</small>
+  </span>
+</div>
+
+{# Real-time xterm.js terminal #}
 <div class="term-wrap">
   <div class="term-titlebar">
     <div class="term-dots"><span class="d-r"></span><span class="d-y"></span><span class="d-g"></span></div>
     <span class="term-title">{{ host.username }}@{{ host.address }}:{{ host.port }} — SSH</span>
     <span class="term-status">
       <span class="term-dot online" id="term-status-dot"></span>
-      <span id="term-status-text">Ready</span>
+      <span id="term-status-text">Connecting…</span>
     </span>
     <div class="term-actions">
-      <button type="button" onclick="document.getElementById('term-body').innerHTML=''" title="Clear (Ctrl+L)">🧹 Clear</button>
-      <button type="button" onclick="copyTerminalOutput(this)" title="Copy all output">📋 Copy</button>
+      <button type="button" id="btn-reconnect" title="Reconnect SSH session">🔄 Reconnect</button>
+      <button type="button" id="btn-copy" title="Copy terminal output">📋 Copy</button>
     </div>
   </div>
-
-  <div class="term-body" id="term-body">
-    {# Render recent command history (newest first, reversed to oldest-first display) #}
-    {% for run in executions | reverse %}
-    <div><span class="term-prompt-label">{{ host.username }}@{{ host.address }}$</span> <span class="term-cmd">{{ run.command }}</span></div>
-    {% if run.stdout %}<div><span class="term-stdout">{{ run.stdout }}</span></div>{% endif %}
-    {% if run.stderr %}<div><span class="term-stderr">{{ run.stderr }}</span></div>{% endif %}
-    {% endfor %}
-  </div>
-
-  <form class="term-inputbar" id="term-form" autocomplete="off">
-    <span class="prompt-label">{{ host.username }}@{{ host.address }}$</span>
-    <input type="text" id="term-input" placeholder="Type a command…" autocomplete="off" autofocus>
-  </form>
+  <div id="xterm-container" style="background:#1a1b26;"></div>
 </div>
 
+{% if old_executions %}
+<section class="card" style="margin-top:1rem;">
+  <div class="card-header">
+    <h3>Command History (older sessions)</h3>
+  </div>
+  <div class="terminal-history">
+    <div class="terminal-history-body">
+      {% for run in old_executions %}
+      <div class="terminal-entry">
+        <div class="terminal-entry-meta">
+          <span class="pill {{ run.status }}">{{ run.status }}</span>
+          <span>{{ run.started_at.strftime('%Y-%m-%d %H:%M:%S') }}</span>
+        </div>
+        <div class="terminal-prompt">{{ run.command }}</div>
+        {% if run.stdout %}<div class="terminal-stdout">{{ run.stdout }}</div>{% endif %}
+        {% if run.stderr %}<div class="terminal-stderr">{{ run.stderr }}</div>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+{% endif %}
+
+{# xterm.js local vendor files #}
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/xterm.css') }}">
+<script src="{{ url_for('static', filename='vendor/xterm.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/addon-fit.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/addon-web-links.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/socket.io.min.js') }}"></script>
 <script>
-  window.TERMINAL_CONFIG = {
-    executeUrl:   '{{ url_for("main.ssh_execute_api", host_id=host.id) }}',
-    statusUrl:    null,
-    historyUrl:   '{{ url_for("main.ssh_history_api", host_id=host.id) }}',
-    shellType:    'ssh',
-    promptLabel:  '{{ host.username }}@{{ host.address }}$',
-    isConnected:  true,
-    csrfToken:    '{{ csrf_token() }}',
-    totalHistory: {{ total_history }},
-    loadedHistory: {{ loaded_history }},
-  };
+(function() {
+  'use strict';
+
+  const HOST_ID = {{ host.id }};
+
+  /* ── xterm.js setup ── */
+  const term = new window.Terminal({
+    cursorBlink: true,
+    fontSize: 14,
+    fontFamily: "'SF Mono', Monaco, Menlo, 'Courier New', monospace",
+    theme: {
+      background: '#1a1b26',
+      foreground: '#c0caf5',
+      cursor: '#c0caf5',
+      selectionBackground: '#33467c',
+      black: '#15161e', red: '#f7768e', green: '#9ece6a', yellow: '#e0af68',
+      blue: '#7aa2f7', magenta: '#bb9af7', cyan: '#7dcfff', white: '#a9b1d6',
+    },
+    scrollback: 10000,
+    allowProposedApi: true,
+  });
+
+  const fitAddon = new window.FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  try {
+    const webLinksAddon = new window.WebLinksAddon.WebLinksAddon();
+    term.loadAddon(webLinksAddon);
+  } catch(e) {}
+
+  const container = document.getElementById('xterm-container');
+  term.open(container);
+  fitAddon.fit();
+
+  window.addEventListener('resize', function() { fitAddon.fit(); });
+
+  /* ── Status UI ── */
+  const statusDot = document.getElementById('term-status-dot');
+  const statusText = document.getElementById('term-status-text');
+  const banner = document.getElementById('term-disconnect-banner');
+
+  function setStatus(connected) {
+    if (statusDot) statusDot.className = 'term-dot ' + (connected ? 'online' : 'offline');
+    if (statusText) statusText.textContent = connected ? 'Connected' : 'Disconnected';
+    if (banner) banner.style.display = connected ? 'none' : 'flex';
+  }
+
+  /* ── SocketIO ── */
+  const socket = io({ transports: ['websocket', 'polling'] });
+  let connected = false;
+
+  function connectSSH() {
+    term.write('\r\nConnecting to {{ host.username }}@{{ host.address }}:{{ host.port }}...\r\n');
+    socket.emit('ssh_connect', {
+      host_id: HOST_ID,
+      cols: term.cols,
+      rows: term.rows,
+    });
+  }
+
+  socket.on('connect', function() {
+    connectSSH();
+  });
+
+  socket.on('shell_output', function(data) {
+    if (data.data) {
+      term.write(data.data);
+    }
+  });
+
+  socket.on('shell_status', function(data) {
+    connected = data.connected;
+    setStatus(connected);
+  });
+
+  /* Send user input to SSH channel */
+  term.onData(function(data) {
+    if (connected) {
+      socket.emit('ssh_input', { data: data });
+    }
+  });
+
+  /* Terminal resize → SSH PTY resize */
+  term.onResize(function(size) {
+    if (connected) {
+      socket.emit('ssh_resize', { cols: size.cols, rows: size.rows });
+    }
+  });
+
+  /* ── Buttons ── */
+  document.getElementById('btn-disconnect').addEventListener('click', function() {
+    if (confirm('Disconnect this SSH session?')) {
+      socket.emit('ssh_disconnect_host', { host_id: HOST_ID });
+      connected = false;
+      setStatus(false);
+    }
+  });
+
+  document.getElementById('btn-reconnect').addEventListener('click', function() {
+    term.write('\r\n--- Reconnecting ---\r\n');
+    connectSSH();
+  });
+
+  document.getElementById('btn-copy').addEventListener('click', function() {
+    const text = (function() {
+      let lines = [];
+      for (let i = 0; i < term.buffer.active.length; i++) {
+        const line = term.buffer.active.getLine(i);
+        if (line) lines.push(line.translateToString(true));
+      }
+      return lines.join('\n');
+    })();
+    navigator.clipboard.writeText(text).then(function() {
+      const btn = document.getElementById('btn-copy');
+      const orig = btn.textContent;
+      btn.textContent = '✓ Copied!';
+      setTimeout(function() { btn.textContent = orig; }, 1500);
+    });
+  });
+})();
 </script>
-<script src="{{ url_for('static', filename='js/terminal.js') }}"></script>
 {% endblock %}

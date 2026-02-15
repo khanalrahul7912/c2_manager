@@ -44,6 +44,8 @@ def _connect_client(
 
     if endpoint.auth_mode == "password":
         connect_kwargs["password"] = endpoint.password or ""
+        connect_kwargs["allow_agent"] = False
+        connect_kwargs["look_for_keys"] = False
     else:
         if endpoint.key_path:
             connect_kwargs["key_filename"] = endpoint.key_path

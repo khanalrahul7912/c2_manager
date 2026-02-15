@@ -30,8 +30,8 @@
   </span>
 </div>
 
-{# Real-time xterm.js terminal #}
-<div class="term-wrap">
+{# Real-time xterm.js terminal with tabs #}
+<div class="term-wrap" id="term-wrap">
   <div class="term-titlebar">
     <div class="term-dots"><span class="d-r"></span><span class="d-y"></span><span class="d-g"></span></div>
     <span class="term-title">{{ shell.shell_user or 'shell' }}@{{ shell.hostname or shell.address }} — Reverse Shell</span>
@@ -40,9 +40,14 @@
       <span id="term-status-text">{% if is_connected %}Connected{% else %}Disconnected{% endif %}</span>
     </span>
     <div class="term-actions">
+      <button type="button" id="btn-fullscreen" title="Toggle fullscreen (F11)">⛶ Fullscreen</button>
       <button type="button" id="btn-reconnect" title="Reconnect terminal (Ctrl+Shift+R)">🔄 Reconnect</button>
       <button type="button" id="btn-copy" title="Copy terminal output (Ctrl+Shift+C)">📋 Copy</button>
     </div>
+  </div>
+  <div class="term-tab-bar" id="term-tab-bar">
+    <button class="term-tab active" data-tab="0">Session 1</button>
+    <button class="term-tab-add" id="btn-new-tab" title="New session tab (Ctrl+Shift+T)">+</button>
   </div>
   <div id="xterm-container" style="background:#1a1b26;"></div>
 </div>
@@ -87,177 +92,306 @@
 
   const SHELL_ID = {{ shell.id }};
   const IS_CONNECTED = {{ 'true' if is_connected else 'false' }};
+  const SHELL_LABEL = '{{ shell.shell_user or "shell" }}@{{ shell.hostname or shell.address }}';
 
-  /* ── xterm.js setup ── */
-  const term = new window.Terminal({
-    cursorBlink: true,
-    fontSize: 14,
-    fontFamily: "'SF Mono', Monaco, Menlo, 'Courier New', monospace",
-    theme: {
-      background: '#1a1b26',
-      foreground: '#c0caf5',
-      cursor: '#c0caf5',
-      selectionBackground: '#33467c',
-      black: '#15161e', red: '#f7768e', green: '#9ece6a', yellow: '#e0af68',
-      blue: '#7aa2f7', magenta: '#bb9af7', cyan: '#7dcfff', white: '#a9b1d6',
-    },
-    scrollback: 10000,
-    allowProposedApi: true,
-  });
-
-  const fitAddon = new window.FitAddon.FitAddon();
-  term.loadAddon(fitAddon);
-  try {
-    const webLinksAddon = new window.WebLinksAddon.WebLinksAddon();
-    term.loadAddon(webLinksAddon);
-  } catch(e) {}
-
-  const container = document.getElementById('xterm-container');
-  term.open(container);
-  fitAddon.fit();
-
-  window.addEventListener('resize', function() { fitAddon.fit(); });
-
-  /* ── Keyboard shortcuts ── */
-  term.attachCustomKeyEventHandler(function(e) {
-    if (e.type !== 'keydown') return true;
-    const ctrl = e.ctrlKey, shift = e.shiftKey;
-    if (ctrl && shift) {
-      switch (e.key) {
-        case 'C':
-          e.preventDefault();
-          const sel = term.getSelection();
-          if (sel) navigator.clipboard.writeText(sel);
-          return false;
-        case 'V':
-          e.preventDefault();
-          navigator.clipboard.readText().then(function(text) {
-            if (connected) socket.emit('reverse_input', { data: text });
-          }).catch(function() {});
-          return false;
-        case 'R':
-          e.preventDefault();
-          doReconnect();
-          return false;
-      }
-    }
-    return true;
-  });
+  /* ── Tab management ── */
+  const tabs = [];
+  let activeTabId = -1;
+  let nextTabId = 0;
+  const tabBar = document.getElementById('term-tab-bar');
+  const termContainer = document.getElementById('xterm-container');
 
   /* ── Status UI ── */
   const statusDot = document.getElementById('term-status-dot');
   const statusText = document.getElementById('term-status-text');
   const banner = document.getElementById('term-disconnect-banner');
 
-  function setStatus(conn) {
-    if (statusDot) statusDot.className = 'term-dot ' + (conn ? 'online' : 'offline');
-    if (statusText) statusText.textContent = conn ? 'Connected' : 'Disconnected';
-    if (banner) banner.style.display = conn ? 'none' : 'flex';
+  function setStatus(connected) {
+    if (statusDot) statusDot.className = 'term-dot ' + (connected ? 'online' : 'offline');
+    if (statusText) statusText.textContent = connected ? 'Connected' : 'Disconnected';
+    if (banner) banner.style.display = connected ? 'none' : 'flex';
   }
 
-  /* ── SocketIO ── */
-  const socket = io({ transports: ['polling', 'websocket'] });
-  let connected = false;
-
-  function connectShell() {
-    socket.emit('reverse_connect', {
-      shell_id: SHELL_ID,
-      cols: term.cols,
-      rows: term.rows,
-    });
+  function getActiveTab() {
+    return tabs.find(function(t) { return t.id === activeTabId; });
   }
 
-  socket.on('connect', function() {
-    if (IS_CONNECTED || connected) {
-      connectShell();
-    }
-  });
-
-  socket.on('shell_output', function(data) {
-    if (data.data) {
-      term.write(data.data);
-    }
-  });
-
-  socket.on('shell_status', function(data) {
-    connected = data.connected;
-    setStatus(connected);
-  });
-
-  /* Send user input to shell */
-  term.onData(function(data) {
-    if (connected) {
-      socket.emit('reverse_input', { data: data });
-    }
-  });
-
-  /* Terminal resize */
-  term.onResize(function(size) {
-    socket.emit('reverse_resize', { cols: size.cols, rows: size.rows });
-  });
-
-  /* Initial connect */
-  if (IS_CONNECTED) {
-    connectShell();
-  } else {
-    term.write('\r\n⚠ Shell is disconnected. Waiting for reconnection...\r\n');
-    setInterval(function() {
-      if (!connected) {
-        fetch('{{ url_for("main.shell_status_api", shell_id=shell.id) }}')
-          .then(function(r) { return r.json(); })
-          .then(function(d) {
-            if (d.connected && !connected) {
-              connected = true;
-              setStatus(true);
-              term.write('\r\n✓ Shell reconnected!\r\n');
-              connectShell();
-            }
-          })
-          .catch(function() {});
-      }
-    }, 5000);
+  /* Create xterm.js terminal options */
+  function makeTermOpts() {
+    return {
+      cursorBlink: true,
+      fontSize: 14,
+      fontFamily: "'SF Mono', Monaco, Menlo, 'Courier New', monospace",
+      theme: {
+        background: '#1a1b26',
+        foreground: '#c0caf5',
+        cursor: '#c0caf5',
+        selectionBackground: '#33467c',
+        black: '#15161e', red: '#f7768e', green: '#9ece6a', yellow: '#e0af68',
+        blue: '#7aa2f7', magenta: '#bb9af7', cyan: '#7dcfff', white: '#a9b1d6',
+      },
+      scrollback: 10000,
+      allowProposedApi: true,
+    };
   }
 
-  function doReconnect() {
-    if (!connected) {
+  /* Status polling for disconnected shells */
+  let pollTimer = null;
+  function startStatusPolling(tab) {
+    if (pollTimer) return;
+    pollTimer = setInterval(function() {
       fetch('{{ url_for("main.shell_status_api", shell_id=shell.id) }}')
         .then(function(r) { return r.json(); })
         .then(function(d) {
           if (d.connected) {
-            connected = true;
+            clearInterval(pollTimer);
+            pollTimer = null;
+            tab.connected = true;
             setStatus(true);
-            connectShell();
-            term.write('\r\n✓ Reconnected!\r\n');
-          } else {
-            term.write('\r\n⚠ Shell is still disconnected\r\n');
+            tab.term.write('\r\n✓ Shell reconnected!\r\n');
+            tab.socket.emit('reverse_connect', { shell_id: SHELL_ID, cols: tab.term.cols, rows: tab.term.rows });
           }
-        });
-    } else {
-      connectShell();
-      term.write('\r\n✓ Terminal re-attached\r\n');
+        })
+        .catch(function() {});
+    }, 5000);
+  }
+
+  /* Create a new terminal tab */
+  function createTab() {
+    const id = nextTabId++;
+    const num = tabs.length + 1;
+
+    /* ── Pane ── */
+    const pane = document.createElement('div');
+    pane.className = 'xterm-tab-pane';
+    pane.style.display = 'none';
+    pane.style.background = '#1a1b26';
+    termContainer.appendChild(pane);
+
+    /* ── xterm ── */
+    const term = new window.Terminal(makeTermOpts());
+    const fitAddon = new window.FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    try {
+      const webLinksAddon = new window.WebLinksAddon.WebLinksAddon();
+      term.loadAddon(webLinksAddon);
+    } catch(e) {}
+    term.open(pane);
+
+    /* ── SocketIO connection ── */
+    const sock = io({ transports: ['polling', 'websocket'] });
+    const tab = { id: id, term: term, fitAddon: fitAddon, socket: sock, connected: false, pane: pane, el: null };
+
+    /* Wire events */
+    sock.on('connect', function() {
+      if (IS_CONNECTED || tab.connected) {
+        term.write('\r\nConnecting to ' + SHELL_LABEL + ' (Session ' + num + ')...\r\n');
+        sock.emit('reverse_connect', { shell_id: SHELL_ID, cols: term.cols, rows: term.rows });
+      }
+    });
+
+    sock.on('shell_output', function(data) {
+      if (data.data) term.write(data.data);
+    });
+
+    sock.on('shell_status', function(data) {
+      tab.connected = data.connected;
+      if (tab.id === activeTabId) setStatus(data.connected);
+      if (!data.connected) startStatusPolling(tab);
+    });
+
+    term.onData(function(data) {
+      if (tab.connected) sock.emit('reverse_input', { data: data });
+    });
+
+    term.onResize(function(size) {
+      sock.emit('reverse_resize', { cols: size.cols, rows: size.rows });
+    });
+
+    /* Keyboard shortcuts */
+    term.attachCustomKeyEventHandler(function(e) {
+      if (e.type !== 'keydown') return true;
+      const ctrl = e.ctrlKey, shift = e.shiftKey;
+      if (ctrl && shift) {
+        switch (e.key) {
+          case 'C':
+            e.preventDefault();
+            const sel = term.getSelection();
+            if (sel) navigator.clipboard.writeText(sel);
+            return false;
+          case 'V':
+            e.preventDefault();
+            navigator.clipboard.readText().then(function(text) {
+              if (tab.connected) sock.emit('reverse_input', { data: text });
+            }).catch(function() {});
+            return false;
+          case 'T':
+            e.preventDefault();
+            createTab();
+            return false;
+          case 'W':
+            e.preventDefault();
+            closeTab(tab.id);
+            return false;
+          case 'R':
+            e.preventDefault();
+            reconnectTab(tab);
+            return false;
+        }
+        const n = parseInt(e.key, 10);
+        if (n >= 1 && n <= 9 && n <= tabs.length) {
+          e.preventDefault();
+          switchTab(tabs[n - 1].id);
+          return false;
+        }
+      }
+      return true;
+    });
+
+    /* ── Tab button ── */
+    const tabBtn = document.createElement('button');
+    tabBtn.className = 'term-tab';
+    tabBtn.setAttribute('data-tab', id);
+    tabBtn.innerHTML = 'Session ' + num + ' <span class="tab-close" title="Close tab">&times;</span>';
+    tabBtn.addEventListener('click', function(e) {
+      if (e.target.classList.contains('tab-close')) {
+        closeTab(id);
+      } else {
+        switchTab(id);
+      }
+    });
+    tab.el = tabBtn;
+
+    tabBar.insertBefore(tabBtn, document.getElementById('btn-new-tab'));
+    tabs.push(tab);
+    switchTab(id);
+
+    if (!IS_CONNECTED) {
+      term.write('\r\n⚠ Shell is disconnected. Waiting for reconnection...\r\n');
+      startStatusPolling(tab);
+    }
+
+    return tab;
+  }
+
+  function switchTab(id) {
+    tabs.forEach(function(t) {
+      const isActive = t.id === id;
+      t.pane.style.display = isActive ? 'block' : 'none';
+      t.el.classList.toggle('active', isActive);
+      if (isActive) {
+        t.fitAddon.fit();
+        t.term.focus();
+        setStatus(t.connected);
+      }
+    });
+    activeTabId = id;
+  }
+
+  function closeTab(id) {
+    if (tabs.length <= 1) return;
+    const idx = tabs.findIndex(function(t) { return t.id === id; });
+    if (idx < 0) return;
+    const tab = tabs[idx];
+    tab.socket.emit('reverse_disconnect_host', { shell_id: SHELL_ID });
+    tab.socket.disconnect();
+    tab.term.dispose();
+    tab.pane.remove();
+    tab.el.remove();
+    tabs.splice(idx, 1);
+    if (activeTabId === id) {
+      switchTab(tabs[Math.min(idx, tabs.length - 1)].id);
     }
   }
 
-  /* ── Buttons ── */
+  function reconnectTab(tab) {
+    if (!tab) tab = getActiveTab();
+    if (!tab) return;
+    tab.term.write('\r\n--- Reconnecting ---\r\n');
+    fetch('{{ url_for("main.shell_status_api", shell_id=shell.id) }}')
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.connected) {
+          tab.connected = true;
+          setStatus(true);
+          tab.socket.emit('reverse_connect', { shell_id: SHELL_ID, cols: tab.term.cols, rows: tab.term.rows });
+          tab.term.write('\r\n✓ Reconnected!\r\n');
+        } else {
+          tab.term.write('\r\n⚠ Shell is still disconnected\r\n');
+          startStatusPolling(tab);
+        }
+      })
+      .catch(function() { tab.term.write('\r\n⚠ Could not check status\r\n'); });
+  }
+
+  /* Remove default first tab button */
+  const defaultTabBtn = tabBar.querySelector('[data-tab="0"]');
+  if (defaultTabBtn) defaultTabBtn.remove();
+
+  /* Create first tab */
+  createTab();
+
+  /* Resize on window resize */
+  window.addEventListener('resize', function() {
+    const tab = getActiveTab();
+    if (tab) tab.fitAddon.fit();
+  });
+
+  /* ── Fullscreen ── */
+  document.getElementById('btn-fullscreen').addEventListener('click', function() {
+    const wrap = document.getElementById('term-wrap');
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      wrap.requestFullscreen().then(function() {
+        setTimeout(function() {
+          const tab = getActiveTab();
+          if (tab) tab.fitAddon.fit();
+        }, 200);
+      }).catch(function() {
+        /* Fallback: toggle CSS class */
+        wrap.classList.toggle('fullscreen');
+        setTimeout(function() {
+          const tab = getActiveTab();
+          if (tab) tab.fitAddon.fit();
+        }, 200);
+      });
+    }
+  });
+  document.addEventListener('fullscreenchange', function() {
+    setTimeout(function() {
+      const tab = getActiveTab();
+      if (tab) tab.fitAddon.fit();
+    }, 200);
+  });
+
+  /* ── New tab button ── */
+  document.getElementById('btn-new-tab').addEventListener('click', function() { createTab(); });
+
+  /* ── Top bar buttons ── */
   document.getElementById('btn-disconnect').addEventListener('click', function() {
+    const tab = getActiveTab();
+    if (!tab) return;
     if (confirm('Forcefully disconnect this shell?')) {
-      socket.emit('reverse_disconnect_host', { shell_id: SHELL_ID });
-      connected = false;
+      tab.socket.emit('reverse_disconnect_host', { shell_id: SHELL_ID });
+      tab.connected = false;
       setStatus(false);
     }
   });
 
-  document.getElementById('btn-reconnect').addEventListener('click', doReconnect);
+  document.getElementById('btn-reconnect').addEventListener('click', function() { reconnectTab(); });
 
   document.getElementById('btn-copy').addEventListener('click', function() {
-    const text = term.buffer.active.getLine(0) ? (function() {
+    const tab = getActiveTab();
+    if (!tab) return;
+    const text = (function() {
       const lines = [];
-      for (let i = 0; i < term.buffer.active.length; i++) {
-        const line = term.buffer.active.getLine(i);
+      for (let i = 0; i < tab.term.buffer.active.length; i++) {
+        const line = tab.term.buffer.active.getLine(i);
         if (line) lines.push(line.translateToString(true));
       }
       return lines.join('\n');
-    })() : '';
+    })();
     navigator.clipboard.writeText(text).then(function() {
       const btn = document.getElementById('btn-copy');
       const orig = btn.textContent;

@@ -629,13 +629,40 @@ code {
 
 /* ===== xterm.js container ===== */
 #xterm-container, .xterm-tab-pane {
-  min-height: 70vh;
+  min-height: 75vh;
   padding: 4px;
-  flex: 1;
+  flex: 1 1 auto;
+  position: relative;
 }
 
 #xterm-container .xterm, .xterm-tab-pane .xterm {
   padding: 0;
+  height: 100%;
+}
+
+/* Fullscreen mode */
+.term-wrap.fullscreen {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 9999;
+  margin: 0;
+  border-radius: 0;
+  border: none;
+}
+.term-wrap.fullscreen #xterm-container,
+.term-wrap.fullscreen .xterm-tab-pane {
+  min-height: 0;
+  height: calc(100vh - 80px);
+}
+.term-wrap:fullscreen {
+  margin: 0;
+  border-radius: 0;
+  border: none;
+}
+.term-wrap:fullscreen #xterm-container,
+.term-wrap:fullscreen .xterm-tab-pane {
+  min-height: 0;
+  height: calc(100vh - 80px);
 }
 
 /* ===== Terminal tab bar ===== */

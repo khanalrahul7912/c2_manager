@@ -30,7 +30,7 @@
 </div>
 
 {# Real-time xterm.js terminal with tabs #}
-<div class="term-wrap">
+<div class="term-wrap" id="term-wrap">
   <div class="term-titlebar">
     <div class="term-dots"><span class="d-r"></span><span class="d-y"></span><span class="d-g"></span></div>
     <span class="term-title">{{ host.username }}@{{ host.address }}:{{ host.port }} — SSH</span>
@@ -39,6 +39,7 @@
       <span id="term-status-text">Connecting…</span>
     </span>
     <div class="term-actions">
+      <button type="button" id="btn-fullscreen" title="Toggle fullscreen (F11)">⛶ Fullscreen</button>
       <button type="button" id="btn-reconnect" title="Reconnect SSH session (Ctrl+Shift+R)">🔄 Reconnect</button>
       <button type="button" id="btn-copy" title="Copy terminal output (Ctrl+Shift+C)">📋 Copy</button>
     </div>
@@ -298,6 +299,33 @@
   /* ── New tab button ── */
   document.getElementById('btn-new-tab').addEventListener('click', function() {
     createTab();
+  });
+
+  /* ── Fullscreen ── */
+  document.getElementById('btn-fullscreen').addEventListener('click', function() {
+    const wrap = document.getElementById('term-wrap');
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      wrap.requestFullscreen().then(function() {
+        setTimeout(function() {
+          const tab = getActiveTab();
+          if (tab) tab.fitAddon.fit();
+        }, 200);
+      }).catch(function() {
+        wrap.classList.toggle('fullscreen');
+        setTimeout(function() {
+          const tab = getActiveTab();
+          if (tab) tab.fitAddon.fit();
+        }, 200);
+      });
+    }
+  });
+  document.addEventListener('fullscreenchange', function() {
+    setTimeout(function() {
+      const tab = getActiveTab();
+      if (tab) tab.fitAddon.fit();
+    }, 200);
   });
 
   /* ── Top bar buttons ── */

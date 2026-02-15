@@ -89,12 +89,9 @@ def settings():
     if request.method == "POST":
         action = request.form.get("action")
         if action == "change_password":
-            current_password = request.form.get("current_password", "")
             new_password = request.form.get("new_password", "")
             confirm_password = request.form.get("confirm_password", "")
-            if not current_user.check_password(current_password):
-                flash("Current password is incorrect.", "danger")
-            elif len(new_password) < 8:
+            if len(new_password) < 8:
                 flash("New password must be at least 8 characters.", "danger")
             elif new_password != confirm_password:
                 flash("New passwords do not match.", "danger")
@@ -102,8 +99,48 @@ def settings():
                 current_user.set_password(new_password)
                 db.session.commit()
                 flash("Password changed successfully.", "success")
+        elif action == "create_user" and current_user.role == "admin":
+            from app.models import User
+            username = request.form.get("new_username", "").strip()
+            password = request.form.get("user_password", "")
+            role = request.form.get("user_role", "operator")
+            if not username or len(username) < 3:
+                flash("Username must be at least 3 characters.", "danger")
+            elif len(password) < 8:
+                flash("Password must be at least 8 characters.", "danger")
+            elif role not in ("admin", "operator"):
+                flash("Invalid role.", "danger")
+            elif User.query.filter_by(username=username).first():
+                flash(f"User '{username}' already exists.", "danger")
+            else:
+                user = User(username=username, role=role)
+                user.set_password(password)
+                db.session.add(user)
+                db.session.commit()
+                flash(f"User '{username}' created.", "success")
+        elif action == "delete_user" and current_user.role == "admin":
+            from app.models import User
+            user_id = request.form.get("user_id", type=int)
+            if user_id and user_id != current_user.id:
+                user = db.session.get(User, user_id)
+                if user:
+                    db.session.delete(user)
+                    db.session.commit()
+                    flash(f"User '{user.username}' deleted.", "success")
+        elif action == "toggle_role" and current_user.role == "admin":
+            from app.models import User
+            user_id = request.form.get("user_id", type=int)
+            if user_id and user_id != current_user.id:
+                user = db.session.get(User, user_id)
+                if user:
+                    user.role = "operator" if user.role == "admin" else "admin"
+                    db.session.commit()
+                    flash(f"User '{user.username}' role changed to {user.role}.", "success")
         return redirect(url_for("auth.settings"))
-    return render_template("settings.html")
+
+    from app.models import User
+    users = User.query.order_by(User.created_at).all() if current_user.role == "admin" else []
+    return render_template("settings.html", users=users)
 
 
 @main_bp.route("/")

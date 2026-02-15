@@ -8,7 +8,7 @@ from __future__ import annotations
 import socket
 import threading
 import time
-from typing import Dict
+from typing import Dict, Set
 
 import paramiko
 from flask import current_app, request
@@ -29,8 +29,10 @@ DEFAULT_TERM_ROWS = 50
 _ws_sessions: Dict[str, dict] = {}
 _ws_lock = threading.Lock()
 
+# Track ALL subscribers for each reverse shell — output is broadcast to all
+_shell_subscribers: Dict[int, Set[str]] = {}  # shell_id -> set of sids
 # Track which SID is the active reader for each reverse shell_id
-# Only one reader thread per physical shell connection to prevent output splitting
+# Only one reader thread per physical shell connection
 _shell_active_reader: Dict[int, str] = {}  # shell_id -> sid
 
 
@@ -56,11 +58,9 @@ def register_events(sio: SocketIO) -> None:
     def on_reverse_connect(data: dict) -> None:
         """Client wants to attach to a reverse shell for real-time I/O.
 
-        Only ONE reader thread is allowed per physical reverse shell connection.
-        If another tab tries to connect to the same shell, it becomes an
-        "input-only" session — it can send keystrokes but output goes to the
-        active reader tab only.  When the active reader disconnects, the next
-        tab that reconnects takes over.
+        Output is broadcast to ALL tabs subscribed to the same shell.
+        Only one reader thread exists per physical shell connection — it
+        reads from the socket and broadcasts to every subscriber.
         """
         if not current_user.is_authenticated:
             emit("shell_output", {"data": "\r\n⚠ Not authenticated\r\n"})
@@ -93,89 +93,81 @@ def register_events(sio: SocketIO) -> None:
 
         sid = request.sid
 
-        # Clean up any existing session for this SID before starting a new one
+        # Register this SID as a subscriber for this shell
         with _ws_lock:
             old = _ws_sessions.get(sid)
             if old:
                 old["active"] = False
 
-        # Allow 0.6s for the old reader thread to notice active=False and exit
-        # its recv loop (0.5s socket timeout + margin).
-        time.sleep(0.6)
-
-        # Check if another SID already has the active reader for this shell
-        with _ws_lock:
-            existing_reader_sid = _shell_active_reader.get(shell_id)
-            has_active_reader = False
-            if existing_reader_sid and existing_reader_sid != sid:
-                existing_info = _ws_sessions.get(existing_reader_sid)
-                if existing_info and existing_info.get("active"):
-                    has_active_reader = True
-
             _ws_sessions[sid] = {
                 "type": "reverse",
                 "shell_id": shell_id,
                 "active": True,
-                "is_reader": not has_active_reader,
             }
 
+            if shell_id not in _shell_subscribers:
+                _shell_subscribers[shell_id] = set()
+            _shell_subscribers[shell_id].add(sid)
+
         emit("shell_status", {"connected": True})
-
-        if has_active_reader:
-            # Another tab already owns the reader — this tab can send input only
-            emit("shell_output", {"data": "\r\n⚠ Another tab is already reading this shell.\r\n"
-                                          "You can type commands here but output appears in the other tab.\r\n"
-                                          "Close the other tab first to take over output.\r\n"})
-            return
-
-        # This SID becomes the active reader for this shell
-        with _ws_lock:
-            _shell_active_reader[shell_id] = sid
-
         emit("shell_output", {"data": "\r\n"})
 
+        # Start a reader thread if one isn't already running for this shell
+        need_reader = False
+        with _ws_lock:
+            existing_reader_sid = _shell_active_reader.get(shell_id)
+            if not existing_reader_sid:
+                need_reader = True
+                _shell_active_reader[shell_id] = sid
+            else:
+                existing_info = _ws_sessions.get(existing_reader_sid)
+                if not existing_info or not existing_info.get("active"):
+                    need_reader = True
+                    _shell_active_reader[shell_id] = sid
+
+        if not need_reader:
+            return  # Another tab already has a reader — we're subscribed and will get output
+
         def _reader() -> None:
-            """Background thread: read from reverse-shell socket → emit to browser."""
+            """Background thread: read from reverse-shell socket → broadcast to all subscribers."""
             try:
                 while True:
                     with _ws_lock:
                         info = _ws_sessions.get(sid)
                         if not info or not info.get("active"):
                             break
-                        # Check we're still the designated reader
                         if _shell_active_reader.get(shell_id) != sid:
                             break
 
                     with listener.lock:
                         c = listener.connections.get(shell_id)
                     if not c or not c.is_active:
-                        sio.emit("shell_status", {"connected": False}, to=sid)
-                        sio.emit("shell_output", {"data": "\r\n⚠ Shell disconnected\r\n"}, to=sid)
+                        _broadcast_to_shell(sio, shell_id, "shell_status", {"connected": False})
+                        _broadcast_to_shell(sio, shell_id, "shell_output", {"data": "\r\n⚠ Shell disconnected\r\n"})
                         break
 
                     try:
                         c.conn.settimeout(0.5)
                         chunk = c.conn.recv(4096)
                         if not chunk:
-                            sio.emit("shell_status", {"connected": False}, to=sid)
-                            sio.emit("shell_output", {"data": "\r\n⚠ Shell disconnected\r\n"}, to=sid)
+                            _broadcast_to_shell(sio, shell_id, "shell_status", {"connected": False})
+                            _broadcast_to_shell(sio, shell_id, "shell_output", {"data": "\r\n⚠ Shell disconnected\r\n"})
                             break
-                        sio.emit("shell_output", {"data": chunk.decode("utf-8", errors="replace")}, to=sid)
+                        _broadcast_to_shell(sio, shell_id, "shell_output", {"data": chunk.decode("utf-8", errors="replace")})
                     except socket.timeout:
                         continue
                     except (BrokenPipeError, ConnectionResetError):
-                        sio.emit("shell_status", {"connected": False}, to=sid)
-                        sio.emit("shell_output", {"data": "\r\n⚠ Shell connection lost\r\n"}, to=sid)
+                        _broadcast_to_shell(sio, shell_id, "shell_status", {"connected": False})
+                        _broadcast_to_shell(sio, shell_id, "shell_output", {"data": "\r\n⚠ Shell connection lost\r\n"})
                         break
                     except OSError:
-                        sio.emit("shell_status", {"connected": False}, to=sid)
+                        _broadcast_to_shell(sio, shell_id, "shell_status", {"connected": False})
                         break
             finally:
                 with _ws_lock:
                     info = _ws_sessions.get(sid)
                     if info:
                         info["active"] = False
-                    # Release the active reader slot so another tab can take over
                     if _shell_active_reader.get(shell_id) == sid:
                         del _shell_active_reader[shell_id]
 
@@ -508,6 +500,17 @@ def register_events(sio: SocketIO) -> None:
         _cleanup_session(request.sid)
 
 
+def _broadcast_to_shell(sio: SocketIO, shell_id: int, event: str, data: dict) -> None:
+    """Broadcast an event to ALL WebSocket subscribers for a given shell."""
+    with _ws_lock:
+        sids = list(_shell_subscribers.get(shell_id, set()))
+    for target_sid in sids:
+        try:
+            sio.emit(event, data, to=target_sid)
+        except Exception:
+            pass
+
+
 def _cleanup_session(sid: str) -> None:
     """Clean up resources for a WebSocket session."""
     with _ws_lock:
@@ -521,17 +524,22 @@ def _cleanup_session(sid: str) -> None:
     if info.get("type") == "reverse":
         shell_id = info.get("shell_id")
         if shell_id:
-            # Release active reader slot so another tab can take over
+            # Remove from subscribers
             with _ws_lock:
+                subs = _shell_subscribers.get(shell_id)
+                if subs:
+                    subs.discard(sid)
+                    if not subs:
+                        del _shell_subscribers[shell_id]
+                # Release active reader slot so another subscriber can take over
                 if _shell_active_reader.get(shell_id) == sid:
                     del _shell_active_reader[shell_id]
+
             # Check if any other SID still has this shell open
             still_attached = False
             with _ws_lock:
-                for other_sid, other_info in _ws_sessions.items():
-                    if other_info.get("shell_id") == shell_id and other_info.get("active"):
-                        still_attached = True
-                        break
+                if _shell_subscribers.get(shell_id):
+                    still_attached = True
             if not still_attached:
                 try:
                     from flask import current_app

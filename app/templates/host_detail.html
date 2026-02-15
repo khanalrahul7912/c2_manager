@@ -1,31 +1,13 @@
 {% extends 'base.html' %}
-{% block title %}Host {{ host.name }}{% endblock %}
+{% block title %}{{ host.name }}{% endblock %}
 {% block content %}
-<section class="card">
-  <div class="card-header">
-    <h2>{{ host.name }}</h2>
-    <div class="toolbar">
-      <a href="{{ url_for('main.edit_host', host_id=host.id) }}" class="btn ghost">Edit</a>
-      <button type="button" class="btn ghost" id="btn-disconnect" title="Close SSH session">⏏ Disconnect</button>
-      <a href="{{ url_for('main.unified_dashboard', view='ssh') }}" class="btn ghost">Back to Hosts</a>
-    </div>
-  </div>
-  <div class="host-info-bar">
-    <span class="info-item"><strong>Endpoint:</strong> <code>{{ host.username }}@{{ host.address }}:{{ host.port }}</code></span>
-    <span class="info-item"><strong>Group:</strong> {{ host.group_name }}</span>
-    <span class="info-item"><strong>Auth:</strong> {{ host.auth_mode }}</span>
-    {% if host.use_jump_host %}
-    <span class="info-item"><strong>Jump:</strong> <code>{{ host.jump_username }}@{{ host.jump_address }}:{{ host.jump_port }}</code></span>
-    {% endif %}
-  </div>
-</section>
 
 {# Disconnect warning banner (hidden initially) #}
 <div class="term-disconnect-banner" id="term-disconnect-banner" style="display:none">
   <span class="warn-icon">⚠️</span>
   <span class="warn-text">
     <strong>SSH session disconnected</strong>
-    <small>Click "🔄 Reconnect" or press Ctrl+Shift+R to start a new session.</small>
+    <small>Press Ctrl+Shift+R or click 🔄 to reconnect.</small>
   </span>
 </div>
 
@@ -33,22 +15,24 @@
 <div class="term-wrap" id="term-wrap">
   <div class="term-titlebar">
     <div class="term-dots"><span class="d-r"></span><span class="d-y"></span><span class="d-g"></span></div>
-    <span class="term-title">{{ host.username }}@{{ host.address }}:{{ host.port }} — SSH</span>
+    <span class="term-title">{{ host.username }}@{{ host.address }}:{{ host.port }} — SSH {% if host.use_jump_host %}(via {{ host.jump_address }}){% endif %}</span>
     <span class="term-status">
       <span class="term-dot online" id="term-status-dot"></span>
       <span id="term-status-text">Connecting…</span>
     </span>
     <div class="term-actions">
-      <button type="button" id="btn-fullscreen" title="Toggle fullscreen (F11)">⛶ Fullscreen</button>
-      <button type="button" id="btn-reconnect" title="Reconnect SSH session (Ctrl+Shift+R)">🔄 Reconnect</button>
-      <button type="button" id="btn-copy" title="Copy terminal output (Ctrl+Shift+C)">📋 Copy</button>
+      <button type="button" id="btn-fullscreen" title="Toggle fullscreen (F11)">⛶</button>
+      <button type="button" id="btn-reconnect" title="Reconnect SSH session (Ctrl+Shift+R)">🔄</button>
+      <button type="button" id="btn-copy" title="Copy terminal output (Ctrl+Shift+C)">📋</button>
+      <button type="button" id="btn-disconnect" title="Close SSH session">⏏</button>
+      <a href="{{ url_for('main.edit_host', host_id=host.id) }}" class="btn ghost" style="font-size:0.68rem;padding:0.15rem 0.4rem;">Edit</a>
     </div>
   </div>
   <div class="term-tab-bar" id="term-tab-bar">
     <button class="term-tab active" data-tab="0">Session 1</button>
     <button class="term-tab-add" id="btn-new-tab" title="New SSH tab (Ctrl+Shift+T)">+</button>
   </div>
-  <div id="xterm-container" style="background:#1a1b26;"></div>
+  <div id="xterm-container" style="background:#080a08;"></div>
 </div>
 
 {% if old_executions %}
@@ -120,14 +104,15 @@
     return {
       cursorBlink: true,
       fontSize: 14,
-      fontFamily: "'SF Mono', Monaco, Menlo, 'Courier New', monospace",
+      fontFamily: "'JetBrains Mono', 'SF Mono', Monaco, Menlo, 'Courier New', monospace",
       theme: {
-        background: '#1a1b26',
-        foreground: '#c0caf5',
-        cursor: '#c0caf5',
-        selectionBackground: '#33467c',
-        black: '#15161e', red: '#f7768e', green: '#9ece6a', yellow: '#e0af68',
-        blue: '#7aa2f7', magenta: '#bb9af7', cyan: '#7dcfff', white: '#a9b1d6',
+        background: '#080a08',
+        foreground: '#c0ffc0',
+        cursor: '#00ff41',
+        cursorAccent: '#080a08',
+        selectionBackground: '#1a4a1a',
+        black: '#0a0e0a', red: '#ff003c', green: '#00ff41', yellow: '#ffb700',
+        blue: '#0ff', magenta: '#ff6090', cyan: '#0ff', white: '#c0ffc0',
       },
       scrollback: 10000,
       allowProposedApi: true,
@@ -143,7 +128,7 @@
     const pane = document.createElement('div');
     pane.className = 'xterm-tab-pane';
     pane.style.display = 'none';
-    pane.style.background = '#1a1b26';
+    pane.style.background = '#080a08';
     termContainer.appendChild(pane);
 
     /* ── xterm ── */

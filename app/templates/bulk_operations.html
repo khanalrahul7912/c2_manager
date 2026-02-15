@@ -123,7 +123,7 @@
               {% else %}-{% endif %}
             </td>
             <td><code>{{ run.command[:80] }}{% if run.command|length > 80 %}…{% endif %}</code></td>
-            <td class="output-preview"><code>{{ (run.stdout or '')[:100] }}{% if (run.stdout or '')|length > 100 %}…{% endif %}{% if run.stderr %} <span style="color:#dc3545">{{ run.stderr[:60] }}</span>{% endif %}</code></td>
+            <td class="output-preview"><code>{{ (run.stdout or '')[:100] }}{% if (run.stdout or '')|length > 100 %}…{% endif %}{% if run.stderr %} <span style="color:var(--danger-color)">{{ run.stderr[:60] }}</span>{% endif %}</code></td>
           </tr>
           {% else %}
           <tr><td colspan="6">No operation history yet.</td></tr>

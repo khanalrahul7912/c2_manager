@@ -8,13 +8,13 @@
   --danger-color: #ff003c;
   --warning-color: #ffb700;
   --info-color: #0ff;
-  --border-color: #1a3a1a;
+  --border-color: #2a4a2a;
   --bg-dark: #0a0e0a;
   --bg-card: #0d120d;
   --bg-surface: #111611;
   --text-primary: #c0ffc0;
-  --text-secondary: #608060;
-  --text-muted: #3a5a3a;
+  --text-secondary: #8ab08a;
+  --text-muted: #7a9a7a;
   --card-shadow: 0 0 20px rgba(0, 255, 65, 0.05);
   --glow: 0 0 10px rgba(0, 255, 65, 0.15);
 }
@@ -448,7 +448,7 @@ code {
 }
 
 .status-indicator.offline {
-  background: #555;
+  background: #888;
 }
 
 /* ===== Dashboard Tabs (dark theme) ===== */
@@ -1230,7 +1230,7 @@ code {
 }
 
 .term-dot.offline {
-  background: #555;
+  background: #888;
 }
 
 .term-actions {

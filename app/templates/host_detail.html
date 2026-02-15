@@ -43,7 +43,7 @@
   <div class="card-header">
     <h3>Command History (older sessions)</h3>
     {% if current_user.role == 'admin' %}
-    <button type="button" class="btn ghost" id="btn-clear-history" style="color:#f44336;">🗑️ Clear History</button>
+    <button type="button" class="btn ghost" id="btn-clear-history" style="color:var(--danger-color);">🗑️ Clear History</button>
     {% endif %}
   </div>
   <div class="terminal-history">

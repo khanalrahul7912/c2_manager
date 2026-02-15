@@ -318,7 +318,11 @@ def register_events(sio: SocketIO) -> None:
                         sio.emit("shell_status", {"connected": False}, to=sid)
                         break
             except Exception:
-                pass
+                # Unexpected error in reader — notify client of disconnection
+                try:
+                    sio.emit("shell_status", {"connected": False}, to=sid)
+                except Exception:
+                    pass
             finally:
                 with _ws_lock:
                     info = _ws_sessions.get(sid)

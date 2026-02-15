@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from functools import wraps
@@ -1259,8 +1260,7 @@ def shell_persistence_api(shell_id: int):
         conn.conn.settimeout(10)
         conn.conn.sendall((cmd + "\n").encode("utf-8"))
 
-        import time as _time
-        _time.sleep(2)
+        time.sleep(2)
 
         output = ""
         conn.conn.settimeout(1)

@@ -21,7 +21,7 @@
       <span id="term-status-text">{% if is_connected %}Connected{% else %}Disconnected{% endif %}</span>
     </span>
     <div class="term-actions">
-      <button type="button" id="btn-persist" title="Enable persistence (cron reconnect)" class="btn ghost" style="font-size:0.68rem;padding:0.15rem 0.4rem;color:var(--warning-color);border-color:var(--warning-color);">🔒 Persist</button>
+      <button type="button" id="btn-persist" title="Enable persistence (cron reconnect)" class="btn ghost persist-badge inactive">🔒 Persist</button>
       <button type="button" id="btn-unpersist" title="Remove persistence" class="btn ghost" style="font-size:0.68rem;padding:0.15rem 0.4rem;display:none;">🔓 Unpersist</button>
       <button type="button" id="btn-fullscreen" title="Toggle fullscreen (F11)">⛶</button>
       <button type="button" id="btn-reconnect" title="Reconnect terminal (Ctrl+Shift+R)">🔄</button>
@@ -434,8 +434,8 @@
     .then(function(d) {
       if (d.success) {
         btn.textContent = '🔒 Persistent';
-        btn.style.color = 'var(--success-color)';
-        btn.style.borderColor = 'var(--success-color)';
+        btn.classList.remove('inactive');
+        btn.classList.add('active');
         document.getElementById('btn-unpersist').style.display = '';
         alert(d.message);
       } else {
@@ -462,8 +462,8 @@
         btn.style.display = 'none';
         var persistBtn = document.getElementById('btn-persist');
         persistBtn.textContent = '🔒 Persist';
-        persistBtn.style.color = 'var(--warning-color)';
-        persistBtn.style.borderColor = 'var(--warning-color)';
+        persistBtn.classList.remove('active');
+        persistBtn.classList.add('inactive');
         alert(d.message);
       } else {
         alert('Failed: ' + (d.error || 'Unknown error'));

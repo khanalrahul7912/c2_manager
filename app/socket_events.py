@@ -99,6 +99,8 @@ def register_events(sio: SocketIO) -> None:
             if old:
                 old["active"] = False
 
+        # Allow 0.6s for the old reader thread to notice active=False and exit
+        # its recv loop (0.5s socket timeout + margin).
         time.sleep(0.6)
 
         # Check if another SID already has the active reader for this shell

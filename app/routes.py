@@ -94,8 +94,8 @@ def settings():
             confirm_password = request.form.get("confirm_password", "")
             if not current_user.check_password(current_password):
                 flash("Current password is incorrect.", "danger")
-            elif len(new_password) < 6:
-                flash("New password must be at least 6 characters.", "danger")
+            elif len(new_password) < 8:
+                flash("New password must be at least 8 characters.", "danger")
             elif new_password != confirm_password:
                 flash("New passwords do not match.", "danger")
             else:
@@ -1333,6 +1333,8 @@ def payload_generator():
             server_ip = s.getsockname()[0]
             s.close()
         except Exception:
+            import logging
+            logging.getLogger(__name__).debug("Could not auto-detect server IP", exc_info=True)
             server_ip = "YOUR_IP"
     return render_template("payload_generator.html", port=port, server_ip=server_ip)
 

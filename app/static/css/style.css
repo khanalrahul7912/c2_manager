@@ -628,14 +628,95 @@ code {
 }
 
 /* ===== xterm.js container ===== */
-#xterm-container {
-  min-height: 60vh;
+#xterm-container, .xterm-tab-pane {
+  min-height: 70vh;
   padding: 4px;
+  flex: 1;
 }
 
-#xterm-container .xterm {
+#xterm-container .xterm, .xterm-tab-pane .xterm {
   padding: 0;
 }
+
+/* ===== Terminal tab bar ===== */
+.term-tab-bar {
+  display: flex;
+  align-items: center;
+  background: #1e1f32;
+  border-bottom: 1px solid #2a2b3d;
+  padding: 0 0.5rem;
+  gap: 2px;
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+.term-tab {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.8rem;
+  background: transparent;
+  border: none;
+  color: #6c7086;
+  font-size: 0.82rem;
+  font-family: inherit;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s;
+}
+.term-tab:hover { color: #a9b1d6; }
+.term-tab.active {
+  color: #c0caf5;
+  border-bottom-color: #7aa2f7;
+  background: #24253a;
+}
+.term-tab .tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  font-size: 0.7rem;
+  color: #6c7086;
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  padding: 0;
+  line-height: 1;
+}
+.term-tab .tab-close:hover { background: #f7768e33; color: #f7768e; }
+.term-tab-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px; height: 26px;
+  background: transparent;
+  border: 1px solid #3d3f58;
+  border-radius: 4px;
+  color: #6c7086;
+  font-size: 1rem;
+  cursor: pointer;
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+.term-tab-add:hover { color: #9ece6a; border-color: #9ece6a; }
+
+/* Scroll to history anchor */
+.scroll-to-history {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.8rem;
+  margin: 0.5rem 0;
+  background: #24253a;
+  color: #7aa2f7;
+  border: 1px solid #2a2b3d;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.scroll-to-history:hover { background: #2a2b3d; }
 
 /* ===== Interactive Terminal ===== */
 .term-wrap {

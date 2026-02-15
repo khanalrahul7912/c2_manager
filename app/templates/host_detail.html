@@ -25,11 +25,11 @@
   <span class="warn-icon">⚠️</span>
   <span class="warn-text">
     <strong>SSH session disconnected</strong>
-    <small>Click "🔄 Reconnect" to start a new session.</small>
+    <small>Click "🔄 Reconnect" or press Ctrl+Shift+R to start a new session.</small>
   </span>
 </div>
 
-{# Real-time xterm.js terminal #}
+{# Real-time xterm.js terminal with tabs #}
 <div class="term-wrap">
   <div class="term-titlebar">
     <div class="term-dots"><span class="d-r"></span><span class="d-y"></span><span class="d-g"></span></div>
@@ -39,15 +39,22 @@
       <span id="term-status-text">Connecting…</span>
     </span>
     <div class="term-actions">
-      <button type="button" id="btn-reconnect" title="Reconnect SSH session">🔄 Reconnect</button>
-      <button type="button" id="btn-copy" title="Copy terminal output">📋 Copy</button>
+      <button type="button" id="btn-reconnect" title="Reconnect SSH session (Ctrl+Shift+R)">🔄 Reconnect</button>
+      <button type="button" id="btn-copy" title="Copy terminal output (Ctrl+Shift+C)">📋 Copy</button>
     </div>
+  </div>
+  <div class="term-tab-bar" id="term-tab-bar">
+    <button class="term-tab active" data-tab="0">Session 1</button>
+    <button class="term-tab-add" id="btn-new-tab" title="New SSH tab (Ctrl+Shift+T)">+</button>
   </div>
   <div id="xterm-container" style="background:#1a1b26;"></div>
 </div>
 
 {% if old_executions %}
-<section class="card" style="margin-top:1rem;">
+<button class="scroll-to-history" onclick="document.getElementById('history-section').scrollIntoView({behavior:'smooth'})">
+  ↓ Scroll to command history ({{ old_executions|length }} entries)
+</button>
+<section class="card" id="history-section" style="margin-top:0.5rem;">
   <div class="card-header">
     <h3>Command History (older sessions)</h3>
     {% if current_user.role == 'admin' %}
@@ -83,36 +90,14 @@
   'use strict';
 
   const HOST_ID = {{ host.id }};
+  const HOST_LABEL = '{{ host.username }}@{{ host.address }}:{{ host.port }}';
 
-  /* ── xterm.js setup ── */
-  const term = new window.Terminal({
-    cursorBlink: true,
-    fontSize: 14,
-    fontFamily: "'SF Mono', Monaco, Menlo, 'Courier New', monospace",
-    theme: {
-      background: '#1a1b26',
-      foreground: '#c0caf5',
-      cursor: '#c0caf5',
-      selectionBackground: '#33467c',
-      black: '#15161e', red: '#f7768e', green: '#9ece6a', yellow: '#e0af68',
-      blue: '#7aa2f7', magenta: '#bb9af7', cyan: '#7dcfff', white: '#a9b1d6',
-    },
-    scrollback: 10000,
-    allowProposedApi: true,
-  });
-
-  const fitAddon = new window.FitAddon.FitAddon();
-  term.loadAddon(fitAddon);
-  try {
-    const webLinksAddon = new window.WebLinksAddon.WebLinksAddon();
-    term.loadAddon(webLinksAddon);
-  } catch(e) {}
-
-  const container = document.getElementById('xterm-container');
-  term.open(container);
-  fitAddon.fit();
-
-  window.addEventListener('resize', function() { fitAddon.fit(); });
+  /* ── Tab management ── */
+  const tabs = [];      /* { id, term, fitAddon, socket, connected, el, pane } */
+  let activeTabId = -1;
+  let nextTabId = 0;
+  const tabBar = document.getElementById('term-tab-bar');
+  const termContainer = document.getElementById('xterm-container');
 
   /* ── Status UI ── */
   const statusDot = document.getElementById('term-status-dot');
@@ -125,67 +110,218 @@
     if (banner) banner.style.display = connected ? 'none' : 'flex';
   }
 
-  /* ── SocketIO ── */
-  const socket = io({ transports: ['websocket', 'polling'] });
-  let connected = false;
-
-  function connectSSH() {
-    term.write('\r\nConnecting to {{ host.username }}@{{ host.address }}:{{ host.port }}...\r\n');
-    socket.emit('ssh_connect', {
-      host_id: HOST_ID,
-      cols: term.cols,
-      rows: term.rows,
-    });
+  function getActiveTab() {
+    return tabs.find(function(t) { return t.id === activeTabId; });
   }
 
-  socket.on('connect', function() {
-    connectSSH();
-  });
+  /* Create xterm.js terminal options */
+  function makeTermOpts() {
+    return {
+      cursorBlink: true,
+      fontSize: 14,
+      fontFamily: "'SF Mono', Monaco, Menlo, 'Courier New', monospace",
+      theme: {
+        background: '#1a1b26',
+        foreground: '#c0caf5',
+        cursor: '#c0caf5',
+        selectionBackground: '#33467c',
+        black: '#15161e', red: '#f7768e', green: '#9ece6a', yellow: '#e0af68',
+        blue: '#7aa2f7', magenta: '#bb9af7', cyan: '#7dcfff', white: '#a9b1d6',
+      },
+      scrollback: 10000,
+      allowProposedApi: true,
+    };
+  }
 
-  socket.on('shell_output', function(data) {
-    if (data.data) {
-      term.write(data.data);
+  /* Create a new terminal tab */
+  function createTab() {
+    const id = nextTabId++;
+    const num = tabs.length + 1;
+
+    /* ── Pane ── */
+    const pane = document.createElement('div');
+    pane.className = 'xterm-tab-pane';
+    pane.style.display = 'none';
+    pane.style.background = '#1a1b26';
+    termContainer.appendChild(pane);
+
+    /* ── xterm ── */
+    const term = new window.Terminal(makeTermOpts());
+    const fitAddon = new window.FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    try {
+      const webLinksAddon = new window.WebLinksAddon.WebLinksAddon();
+      term.loadAddon(webLinksAddon);
+    } catch(e) {}
+    term.open(pane);
+
+    /* ── SocketIO connection ── */
+    const sock = io({ transports: ['polling', 'websocket'] });
+    const tab = { id: id, term: term, fitAddon: fitAddon, socket: sock, connected: false, pane: pane, el: null };
+
+    /* Wire events */
+    sock.on('connect', function() {
+      term.write('\r\nConnecting to ' + HOST_LABEL + ' (Session ' + num + ')...\r\n');
+      sock.emit('ssh_connect', { host_id: HOST_ID, cols: term.cols, rows: term.rows });
+    });
+
+    sock.on('shell_output', function(data) {
+      if (data.data) term.write(data.data);
+    });
+
+    sock.on('shell_status', function(data) {
+      tab.connected = data.connected;
+      if (tab.id === activeTabId) setStatus(data.connected);
+    });
+
+    term.onData(function(data) {
+      if (tab.connected) sock.emit('ssh_input', { data: data });
+    });
+
+    term.onResize(function(size) {
+      if (tab.connected) sock.emit('ssh_resize', { cols: size.cols, rows: size.rows });
+    });
+
+    /* Keyboard shortcuts inside terminal */
+    term.attachCustomKeyEventHandler(function(e) {
+      if (e.type !== 'keydown') return true;
+      const ctrl = e.ctrlKey, shift = e.shiftKey;
+      if (ctrl && shift) {
+        switch (e.key) {
+          case 'C': /* Ctrl+Shift+C → copy selected text */
+            e.preventDefault();
+            const sel = term.getSelection();
+            if (sel) navigator.clipboard.writeText(sel);
+            return false;
+          case 'V': /* Ctrl+Shift+V → paste */
+            e.preventDefault();
+            navigator.clipboard.readText().then(function(text) {
+              if (tab.connected) sock.emit('ssh_input', { data: text });
+            }).catch(function() {});
+            return false;
+          case 'T': /* Ctrl+Shift+T → new tab */
+            e.preventDefault();
+            createTab();
+            return false;
+          case 'W': /* Ctrl+Shift+W → close current tab */
+            e.preventDefault();
+            closeTab(tab.id);
+            return false;
+          case 'R': /* Ctrl+Shift+R → reconnect */
+            e.preventDefault();
+            reconnectTab(tab);
+            return false;
+        }
+        /* Ctrl+Shift+1-9 → switch to tab N */
+        const n = parseInt(e.key);
+        if (n >= 1 && n <= 9 && n <= tabs.length) {
+          e.preventDefault();
+          switchTab(tabs[n - 1].id);
+          return false;
+        }
+      }
+      return true;
+    });
+
+    /* ── Tab button ── */
+    const tabBtn = document.createElement('button');
+    tabBtn.className = 'term-tab';
+    tabBtn.setAttribute('data-tab', id);
+    tabBtn.innerHTML = 'Session ' + num + ' <span class="tab-close" title="Close tab">&times;</span>';
+    tabBtn.addEventListener('click', function(e) {
+      if (e.target.classList.contains('tab-close')) {
+        closeTab(id);
+      } else {
+        switchTab(id);
+      }
+    });
+    tab.el = tabBtn;
+
+    /* Insert before the "+" button */
+    tabBar.insertBefore(tabBtn, document.getElementById('btn-new-tab'));
+
+    tabs.push(tab);
+    switchTab(id);
+    return tab;
+  }
+
+  function switchTab(id) {
+    tabs.forEach(function(t) {
+      const isActive = t.id === id;
+      t.pane.style.display = isActive ? 'block' : 'none';
+      t.el.classList.toggle('active', isActive);
+      if (isActive) {
+        t.fitAddon.fit();
+        t.term.focus();
+        setStatus(t.connected);
+      }
+    });
+    activeTabId = id;
+  }
+
+  function closeTab(id) {
+    if (tabs.length <= 1) return; /* keep at least one tab */
+    const idx = tabs.findIndex(function(t) { return t.id === id; });
+    if (idx < 0) return;
+    const tab = tabs[idx];
+    tab.socket.emit('ssh_disconnect_host', { host_id: HOST_ID });
+    tab.socket.disconnect();
+    tab.term.dispose();
+    tab.pane.remove();
+    tab.el.remove();
+    tabs.splice(idx, 1);
+    if (activeTabId === id) {
+      switchTab(tabs[Math.min(idx, tabs.length - 1)].id);
     }
+  }
+
+  function reconnectTab(tab) {
+    if (!tab) tab = getActiveTab();
+    if (!tab) return;
+    tab.term.write('\r\n--- Reconnecting ---\r\n');
+    tab.socket.emit('ssh_connect', { host_id: HOST_ID, cols: tab.term.cols, rows: tab.term.rows });
+  }
+
+  /* Remove default first tab button */
+  const defaultTabBtn = tabBar.querySelector('[data-tab="0"]');
+  if (defaultTabBtn) defaultTabBtn.remove();
+
+  /* Create first tab */
+  createTab();
+
+  /* Resize all tabs on window resize */
+  window.addEventListener('resize', function() {
+    const tab = getActiveTab();
+    if (tab) tab.fitAddon.fit();
   });
 
-  socket.on('shell_status', function(data) {
-    connected = data.connected;
-    setStatus(connected);
+  /* ── New tab button ── */
+  document.getElementById('btn-new-tab').addEventListener('click', function() {
+    createTab();
   });
 
-  /* Send user input to SSH channel */
-  term.onData(function(data) {
-    if (connected) {
-      socket.emit('ssh_input', { data: data });
-    }
-  });
-
-  /* Terminal resize → SSH PTY resize */
-  term.onResize(function(size) {
-    if (connected) {
-      socket.emit('ssh_resize', { cols: size.cols, rows: size.rows });
-    }
-  });
-
-  /* ── Buttons ── */
+  /* ── Top bar buttons ── */
   document.getElementById('btn-disconnect').addEventListener('click', function() {
+    const tab = getActiveTab();
+    if (!tab) return;
     if (confirm('Disconnect this SSH session?')) {
-      socket.emit('ssh_disconnect_host', { host_id: HOST_ID });
-      connected = false;
+      tab.socket.emit('ssh_disconnect_host', { host_id: HOST_ID });
+      tab.connected = false;
       setStatus(false);
     }
   });
 
   document.getElementById('btn-reconnect').addEventListener('click', function() {
-    term.write('\r\n--- Reconnecting ---\r\n');
-    connectSSH();
+    reconnectTab();
   });
 
   document.getElementById('btn-copy').addEventListener('click', function() {
+    const tab = getActiveTab();
+    if (!tab) return;
     const text = (function() {
-      let lines = [];
-      for (let i = 0; i < term.buffer.active.length; i++) {
-        const line = term.buffer.active.getLine(i);
+      const lines = [];
+      for (let i = 0; i < tab.term.buffer.active.length; i++) {
+        const line = tab.term.buffer.active.getLine(i);
         if (line) lines.push(line.translateToString(true));
       }
       return lines.join('\n');
@@ -212,6 +348,8 @@
         if (d.success) {
           const section = clearBtn.closest('section');
           if (section) section.remove();
+          const scrollBtn = document.querySelector('.scroll-to-history');
+          if (scrollBtn) scrollBtn.remove();
         }
       })
       .catch(function(e) { alert('Error clearing history: ' + e); });

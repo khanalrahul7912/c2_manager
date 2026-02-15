@@ -26,7 +26,7 @@
   <span class="warn-icon">⚠️</span>
   <span class="warn-text">
     <strong>Shell is disconnected</strong>
-    <small>The terminal will resume automatically when the shell reconnects.</small>
+    <small>The terminal will resume automatically when the shell reconnects. You can also press Ctrl+Shift+R.</small>
   </span>
 </div>
 
@@ -40,15 +40,18 @@
       <span id="term-status-text">{% if is_connected %}Connected{% else %}Disconnected{% endif %}</span>
     </span>
     <div class="term-actions">
-      <button type="button" id="btn-reconnect" title="Reconnect terminal">🔄 Reconnect</button>
-      <button type="button" id="btn-copy" title="Copy terminal output">📋 Copy</button>
+      <button type="button" id="btn-reconnect" title="Reconnect terminal (Ctrl+Shift+R)">🔄 Reconnect</button>
+      <button type="button" id="btn-copy" title="Copy terminal output (Ctrl+Shift+C)">📋 Copy</button>
     </div>
   </div>
   <div id="xterm-container" style="background:#1a1b26;"></div>
 </div>
 
 {% if old_executions %}
-<section class="card" style="margin-top:1rem;">
+<button class="scroll-to-history" onclick="document.getElementById('history-section').scrollIntoView({behavior:'smooth'})">
+  ↓ Scroll to command history ({{ old_executions|length }} entries)
+</button>
+<section class="card" id="history-section" style="margin-top:0.5rem;">
   <div class="card-header">
     <h3>Command History (older sessions)</h3>
     {% if current_user.role == 'admin' %}
@@ -115,19 +118,45 @@
 
   window.addEventListener('resize', function() { fitAddon.fit(); });
 
+  /* ── Keyboard shortcuts ── */
+  term.attachCustomKeyEventHandler(function(e) {
+    if (e.type !== 'keydown') return true;
+    const ctrl = e.ctrlKey, shift = e.shiftKey;
+    if (ctrl && shift) {
+      switch (e.key) {
+        case 'C':
+          e.preventDefault();
+          const sel = term.getSelection();
+          if (sel) navigator.clipboard.writeText(sel);
+          return false;
+        case 'V':
+          e.preventDefault();
+          navigator.clipboard.readText().then(function(text) {
+            if (connected) socket.emit('reverse_input', { data: text });
+          }).catch(function() {});
+          return false;
+        case 'R':
+          e.preventDefault();
+          doReconnect();
+          return false;
+      }
+    }
+    return true;
+  });
+
   /* ── Status UI ── */
   const statusDot = document.getElementById('term-status-dot');
   const statusText = document.getElementById('term-status-text');
   const banner = document.getElementById('term-disconnect-banner');
 
-  function setStatus(connected) {
-    if (statusDot) statusDot.className = 'term-dot ' + (connected ? 'online' : 'offline');
-    if (statusText) statusText.textContent = connected ? 'Connected' : 'Disconnected';
-    if (banner) banner.style.display = connected ? 'none' : 'flex';
+  function setStatus(conn) {
+    if (statusDot) statusDot.className = 'term-dot ' + (conn ? 'online' : 'offline');
+    if (statusText) statusText.textContent = conn ? 'Connected' : 'Disconnected';
+    if (banner) banner.style.display = conn ? 'none' : 'flex';
   }
 
   /* ── SocketIO ── */
-  const socket = io({ transports: ['websocket', 'polling'] });
+  const socket = io({ transports: ['polling', 'websocket'] });
   let connected = false;
 
   function connectShell() {
@@ -153,9 +182,6 @@
   socket.on('shell_status', function(data) {
     connected = data.connected;
     setStatus(connected);
-    if (connected && !term._initialized) {
-      term._initialized = true;
-    }
   });
 
   /* Send user input to shell */
@@ -175,7 +201,6 @@
     connectShell();
   } else {
     term.write('\r\n⚠ Shell is disconnected. Waiting for reconnection...\r\n');
-    // Poll for reconnection
     setInterval(function() {
       if (!connected) {
         fetch('{{ url_for("main.shell_status_api", shell_id=shell.id) }}')
@@ -193,16 +218,7 @@
     }, 5000);
   }
 
-  /* ── Buttons ── */
-  document.getElementById('btn-disconnect').addEventListener('click', function() {
-    if (confirm('Forcefully disconnect this shell?')) {
-      socket.emit('reverse_disconnect_host', { shell_id: SHELL_ID });
-      connected = false;
-      setStatus(false);
-    }
-  });
-
-  document.getElementById('btn-reconnect').addEventListener('click', function() {
+  function doReconnect() {
     if (!connected) {
       fetch('{{ url_for("main.shell_status_api", shell_id=shell.id) }}')
         .then(function(r) { return r.json(); })
@@ -220,11 +236,22 @@
       connectShell();
       term.write('\r\n✓ Terminal re-attached\r\n');
     }
+  }
+
+  /* ── Buttons ── */
+  document.getElementById('btn-disconnect').addEventListener('click', function() {
+    if (confirm('Forcefully disconnect this shell?')) {
+      socket.emit('reverse_disconnect_host', { shell_id: SHELL_ID });
+      connected = false;
+      setStatus(false);
+    }
   });
+
+  document.getElementById('btn-reconnect').addEventListener('click', doReconnect);
 
   document.getElementById('btn-copy').addEventListener('click', function() {
     const text = term.buffer.active.getLine(0) ? (function() {
-      let lines = [];
+      const lines = [];
       for (let i = 0; i < term.buffer.active.length; i++) {
         const line = term.buffer.active.getLine(i);
         if (line) lines.push(line.translateToString(true));
@@ -253,6 +280,8 @@
         if (d.success) {
           const section = clearBtn.closest('section');
           if (section) section.remove();
+          const scrollBtn = document.querySelector('.scroll-to-history');
+          if (scrollBtn) scrollBtn.remove();
         }
       })
       .catch(function(e) { alert('Error clearing history: ' + e); });

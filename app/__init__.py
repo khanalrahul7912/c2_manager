@@ -23,7 +23,7 @@ def create_app() -> Flask:
     migrate.init_app(app, db)
     login_manager.init_app(app)
     csrf.init_app(app)
-    socketio.init_app(app, cors_allowed_origins="*")
+    socketio.init_app(app, cors_allowed_origins="*", async_mode="threading")
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(main_bp)

@@ -428,6 +428,19 @@ class ShellListener:
                     self.connections[shell_id] = ShellConnection(conn, addr, shell_id, platform=platform)
                 
                 print(f"[+] Shell registered: {shell.name} (ID: {shell_id}, Session: {shell.session_id})")
+
+                # Broadcast notification to all connected WebSocket clients
+                try:
+                    from app.extensions import socketio
+                    socketio.emit("new_shell_connected", {
+                        "id": shell_id,
+                        "name": shell.name,
+                        "address": addr[0],
+                        "platform": platform,
+                        "hostname": hostname,
+                    })
+                except Exception:
+                    pass
                 
                 # Keep connection alive
                 while self.is_running and self.connections.get(shell_id):

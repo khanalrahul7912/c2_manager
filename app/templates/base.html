@@ -19,6 +19,7 @@
         <a href="{{ url_for('main.import_hosts') }}">📥 Import SSH Hosts</a>
         {% endif %}
         <span>{{ current_user.username }} ({{ current_user.role }})</span>
+        <a href="{{ url_for('auth.settings') }}">⚙️ Settings</a>
         <a href="{{ url_for('auth.logout') }}">Logout</a>
       </nav>
       {% endif %}

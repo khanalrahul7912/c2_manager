@@ -735,4 +735,84 @@ const observer = new MutationObserver(() => {
 });
 observer.observe(resultsPanel, { attributes: true, attributeFilter: ['style'] });
 </script>
+
+{# ── Auto-refresh & New Shell Notification ── #}
+<script src="{{ url_for('static', filename='vendor/socket.io.min.js') }}"></script>
+<script>
+(function() {
+  'use strict';
+
+  // Auto-refresh interval (30 seconds)
+  let autoRefreshTimer = null;
+  const AUTO_REFRESH_INTERVAL = 30000;
+
+  function startAutoRefresh() {
+    if (autoRefreshTimer) return;
+    autoRefreshTimer = setInterval(function() {
+      window.location.reload();
+    }, AUTO_REFRESH_INTERVAL);
+  }
+
+  // Start auto-refresh by default
+  startAutoRefresh();
+
+  // Connect to Socket.IO for real-time notifications
+  try {
+    const sock = io({ transports: ['polling', 'websocket'] });
+
+    sock.on('new_shell_connected', function(data) {
+      // Play notification sound
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.frequency.value = 800;
+        gain.gain.value = 0.3;
+        osc.start();
+        osc.stop(ctx.currentTime + 0.15);
+        setTimeout(function() {
+          const osc2 = ctx.createOscillator();
+          const gain2 = ctx.createGain();
+          osc2.connect(gain2);
+          gain2.connect(ctx.destination);
+          osc2.frequency.value = 1200;
+          gain2.gain.value = 0.3;
+          osc2.start();
+          osc2.stop(ctx.currentTime + 0.2);
+        }, 200);
+      } catch(e) {}
+
+      // Show browser notification
+      if (Notification.permission === 'granted') {
+        new Notification('New Shell Connected', {
+          body: (data.hostname || data.address) + ' (' + (data.platform || 'Unknown') + ')',
+          icon: '{{ url_for("static", filename="img/favicon.svg") }}',
+        });
+      } else if (Notification.permission !== 'denied') {
+        Notification.requestPermission();
+      }
+
+      // Show in-page toast
+      const toast = document.createElement('div');
+      toast.style.cssText = 'position:fixed;top:1rem;right:1rem;background:#4caf50;color:#fff;padding:1rem 1.5rem;border-radius:8px;z-index:2000;box-shadow:0 4px 12px rgba(0,0,0,0.3);font-weight:600;animation:slideIn 0.3s ease;cursor:pointer;';
+      toast.textContent = '🔔 New shell: ' + (data.hostname || data.address) + ' (' + (data.platform || 'Unknown') + ')';
+      toast.addEventListener('click', function() {
+        window.location.href = '/shells/' + data.id;
+      });
+      document.body.appendChild(toast);
+      setTimeout(function() { toast.remove(); }, 8000);
+
+      // Auto-refresh the page after 2 seconds to show the new shell
+      setTimeout(function() { window.location.reload(); }, 2000);
+    });
+  } catch(e) {}
+
+  // Request notification permission on page load
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
+})();
+</script>
 {% endblock %}

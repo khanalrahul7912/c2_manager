@@ -82,6 +82,30 @@ def logout():
     return redirect(url_for("auth.login"))
 
 
+@auth_bp.route("/settings", methods=["GET", "POST"])
+@login_required
+def settings():
+    """User profile and settings management."""
+    if request.method == "POST":
+        action = request.form.get("action")
+        if action == "change_password":
+            current_password = request.form.get("current_password", "")
+            new_password = request.form.get("new_password", "")
+            confirm_password = request.form.get("confirm_password", "")
+            if not current_user.check_password(current_password):
+                flash("Current password is incorrect.", "danger")
+            elif len(new_password) < 6:
+                flash("New password must be at least 6 characters.", "danger")
+            elif new_password != confirm_password:
+                flash("New passwords do not match.", "danger")
+            else:
+                current_user.set_password(new_password)
+                db.session.commit()
+                flash("Password changed successfully.", "success")
+        return redirect(url_for("auth.settings"))
+    return render_template("settings.html")
+
+
 @main_bp.route("/")
 @login_required
 def dashboard():
@@ -1299,7 +1323,18 @@ def payload_generator():
     """Show reverse shell payload generator with server IP/port pre-filled."""
     listener = get_listener(current_app)
     port = listener.port if listener else current_app.config.get("SHELL_LISTENER_PORT", 5000)
-    return render_template("payload_generator.html", port=port)
+    # Auto-detect server IP
+    server_ip = request.host.split(":")[0]
+    if server_ip in ("127.0.0.1", "localhost", "0.0.0.0"):
+        try:
+            import socket as _sock
+            s = _sock.socket(_sock.AF_INET, _sock.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            server_ip = s.getsockname()[0]
+            s.close()
+        except Exception:
+            server_ip = "YOUR_IP"
+    return render_template("payload_generator.html", port=port, server_ip=server_ip)
 
 
 @main_bp.route("/control-panel")

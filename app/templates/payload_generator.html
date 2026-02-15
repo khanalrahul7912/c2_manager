@@ -1,26 +1,7 @@
 {% extends 'base.html' %}
 {% block title %}Payload Generator{% endblock %}
 {% block content %}
-<style>
-.gen-container { max-width: 1200px; margin: 0 auto; }
-.gen-header { background: linear-gradient(135deg, #1e3a5f 0%, #2d5a8e 100%); color: #fff; padding: 1.5rem 2rem; border-radius: 10px 10px 0 0; }
-.gen-header h2 { margin: 0 0 0.5rem 0; font-size: 1.5rem; }
-.gen-header p { margin: 0; opacity: 0.85; font-size: 0.95rem; }
-.gen-body { background: #fff; border: 1px solid #e0e0e0; border-top: none; border-radius: 0 0 10px 10px; padding: 2rem; }
-.config-row { display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
-.config-field { flex: 1; min-width: 200px; }
-.config-field label { display: block; font-weight: 600; margin-bottom: 0.4rem; color: #333; font-size: 0.9rem; }
-.config-field input, .config-field select { width: 100%; padding: 0.6rem 0.8rem; border: 1px solid #ccc; border-radius: 6px; font-size: 0.95rem; }
-.payload-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 1.2rem; margin-top: 1rem; }
-.payload-card { background: #1a1a2e; border-radius: 8px; overflow: hidden; border: 1px solid #333; }
-.payload-card-header { display: flex; align-items: center; justify-content: space-between; padding: 0.7rem 1rem; background: #16213e; border-bottom: 1px solid #333; }
-.payload-card-header .lang { color: #4fc3f7; font-weight: 600; font-size: 0.95rem; }
-.payload-card-header .copy-btn { background: #2196F3; color: #fff; border: none; padding: 0.3rem 0.8rem; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
-.payload-card-header .copy-btn:hover { background: #1976D2; }
-.payload-card-header .copy-btn.copied { background: #4caf50; }
-.payload-code { padding: 1rem; color: #e0e0e0; font-family: 'Courier New', monospace; font-size: 0.82rem; line-height: 1.6; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; user-select: all; }
-.section-title { font-size: 1.1rem; font-weight: 600; color: #333; margin: 1.5rem 0 0.8rem; padding-bottom: 0.4rem; border-bottom: 2px solid #e0e0e0; }
-</style>
+{# All styles are now in style.css #}
 
 <div class="gen-container">
   <div class="gen-header">

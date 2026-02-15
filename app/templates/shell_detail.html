@@ -21,6 +21,8 @@
       <span id="term-status-text">{% if is_connected %}Connected{% else %}Disconnected{% endif %}</span>
     </span>
     <div class="term-actions">
+      <button type="button" id="btn-persist" title="Enable persistence (cron reconnect)" class="btn ghost" style="font-size:0.68rem;padding:0.15rem 0.4rem;color:var(--warning-color);border-color:var(--warning-color);">🔒 Persist</button>
+      <button type="button" id="btn-unpersist" title="Remove persistence" class="btn ghost" style="font-size:0.68rem;padding:0.15rem 0.4rem;display:none;">🔓 Unpersist</button>
       <button type="button" id="btn-fullscreen" title="Toggle fullscreen (F11)">⛶</button>
       <button type="button" id="btn-reconnect" title="Reconnect terminal (Ctrl+Shift+R)">🔄</button>
       <button type="button" id="btn-copy" title="Copy terminal output (Ctrl+Shift+C)">📋</button>
@@ -414,6 +416,63 @@
       .catch(function(e) { alert('Error clearing history: ' + e); });
     });
   }
+  /* Persistence buttons */
+  document.getElementById('btn-persist').addEventListener('click', function() {
+    const lhost = prompt('Enter your listener IP (LHOST) for reconnection:');
+    if (!lhost) return;
+    const lport = prompt('Enter your listener port (LPORT):', '5000');
+    if (!lport) return;
+    const btn = this;
+    btn.textContent = '⏳ Setting up...';
+    btn.disabled = true;
+    fetch('{{ url_for("main.shell_persistence_api", shell_id=shell.id) }}', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' },
+      body: JSON.stringify({ action: 'enable', lhost: lhost, lport: lport })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.success) {
+        btn.textContent = '🔒 Persistent';
+        btn.style.color = 'var(--success-color)';
+        btn.style.borderColor = 'var(--success-color)';
+        document.getElementById('btn-unpersist').style.display = '';
+        alert(d.message);
+      } else {
+        btn.textContent = '🔒 Persist';
+        alert('Failed: ' + (d.error || d.message || 'Unknown error'));
+      }
+      btn.disabled = false;
+    })
+    .catch(function(e) { btn.textContent = '🔒 Persist'; btn.disabled = false; alert('Error: ' + e); });
+  });
+
+  document.getElementById('btn-unpersist').addEventListener('click', function() {
+    if (!confirm('Remove persistence from this shell?')) return;
+    const btn = this;
+    btn.disabled = true;
+    fetch('{{ url_for("main.shell_persistence_api", shell_id=shell.id) }}', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' },
+      body: JSON.stringify({ action: 'remove' })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.success) {
+        btn.style.display = 'none';
+        var persistBtn = document.getElementById('btn-persist');
+        persistBtn.textContent = '🔒 Persist';
+        persistBtn.style.color = 'var(--warning-color)';
+        persistBtn.style.borderColor = 'var(--warning-color)';
+        alert(d.message);
+      } else {
+        alert('Failed: ' + (d.error || 'Unknown error'));
+      }
+      btn.disabled = false;
+    })
+    .catch(function(e) { btn.disabled = false; alert('Error: ' + e); });
+  });
+
 })();
 </script>
 {% endblock %}

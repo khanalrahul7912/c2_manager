@@ -254,8 +254,10 @@ class ShellListener:
                         # Drain stale data
                         conn.settimeout(0.3)
                         try:
-                            while conn.recv(4096):
-                                pass
+                            while True:
+                                d = conn.recv(4096)
+                                if not d:
+                                    break
                         except (socket.timeout, OSError):
                             pass
                         conn.sendall(cmd.encode('utf-8'))
@@ -315,8 +317,10 @@ class ShellListener:
                         time.sleep(1.5)
                         conn.settimeout(2)
                         try:
-                            while conn.recv(4096):
-                                pass
+                            while True:
+                                d = conn.recv(4096)
+                                if not d:
+                                    break
                         except (socket.timeout, OSError):
                             pass
                         conn.sendall(b'stty rows 50 cols 200 2>/dev/null; export TERM=xterm-256color\n')
@@ -332,7 +336,6 @@ class ShellListener:
                 # Create or update shell record – match by IP address only
                 # so that reconnections from the same host reuse the
                 # existing record.
-                default_hostname = f"host-{ip}"
                 shell = ReverseShell.query.filter_by(address=ip).first()
                 if not shell:
                     session_id = secrets.token_urlsafe(16)
@@ -357,7 +360,7 @@ class ShellListener:
                     shell.disconnected_at = None
                     shell.connected_at = datetime.utcnow()
                     shell.last_seen = datetime.utcnow()
-                    if hostname and hostname != default_hostname:
+                    if hostname and hostname != f"host-{ip}":
                         shell.hostname = hostname
                         shell.name = hostname
                     if platform and platform != 'Unknown':
@@ -416,6 +419,12 @@ class ShellListener:
                                 ConnectionAbortedError, OSError):
                             print(f"[-] Keepalive check failed for shell {shell_id}")
                             break
+                        finally:
+                            # Restore a reasonable timeout for other operations
+                            try:
+                                conn.settimeout(30)
+                            except OSError:
+                                pass
 
                         # Update last_seen
                         with self.app.app_context():

@@ -119,11 +119,14 @@ def settings():
                 db.session.commit()
                 flash(f"User '{username}' created.", "success")
         elif action == "delete_user" and current_user.role == "admin":
-            from app.models import User
+            from app.models import User, CommandExecution, ShellExecution
             user_id = request.form.get("user_id", type=int)
             if user_id and user_id != current_user.id:
                 user = db.session.get(User, user_id)
                 if user:
+                    # Reassign executions to current admin before deleting
+                    CommandExecution.query.filter_by(user_id=user.id).update({"user_id": current_user.id})
+                    ShellExecution.query.filter_by(user_id=user.id).update({"user_id": current_user.id})
                     db.session.delete(user)
                     db.session.commit()
                     flash(f"User '{user.username}' deleted.", "success")

@@ -59,8 +59,17 @@ def register_events(sio: SocketIO) -> None:
         emit("shell_status", {"connected": True})
         emit("shell_output", {"data": "\r\n"})
 
-        # Store reference and start reader thread
+        # Clean up any existing session for this SID before starting a new one
         sid = request.sid
+        with _ws_lock:
+            old = _ws_sessions.get(sid)
+            if old:
+                old["active"] = False  # Signal old reader thread to stop
+
+        # Give old reader thread time to notice the stop signal
+        import time as _time
+        _time.sleep(0.6)
+
         with _ws_lock:
             _ws_sessions[sid] = {
                 "type": "reverse",
@@ -94,6 +103,10 @@ def register_events(sio: SocketIO) -> None:
                         sio.emit("shell_output", {"data": chunk.decode("utf-8", errors="replace")}, to=sid)
                     except socket.timeout:
                         continue
+                    except (BrokenPipeError, ConnectionResetError):
+                        sio.emit("shell_status", {"connected": False}, to=sid)
+                        sio.emit("shell_output", {"data": "\r\n⚠ Shell connection lost\r\n"}, to=sid)
+                        break
                     except OSError:
                         sio.emit("shell_status", {"connected": False}, to=sid)
                         break
@@ -137,8 +150,9 @@ def register_events(sio: SocketIO) -> None:
         if raw:
             try:
                 conn.conn.sendall(raw.encode("utf-8"))
-            except OSError:
+            except (BrokenPipeError, ConnectionResetError, OSError):
                 emit("shell_status", {"connected": False})
+                emit("shell_output", {"data": "\r\n⚠ Shell connection lost\r\n"})
 
     @sio.on("reverse_resize")
     def on_reverse_resize(data: dict) -> None:
@@ -220,6 +234,9 @@ def register_events(sio: SocketIO) -> None:
                 )
 
         sid = request.sid
+
+        # Clean up any existing session for this SID before starting a new one
+        _cleanup_session(sid)
 
         try:
             client = paramiko.SSHClient()

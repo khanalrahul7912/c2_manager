@@ -50,6 +50,9 @@
 <section class="card" style="margin-top:1rem;">
   <div class="card-header">
     <h3>Command History (older sessions)</h3>
+    {% if current_user.role == 'admin' %}
+    <button type="button" class="btn ghost" id="btn-clear-history" style="color:#f44336;">🗑️ Clear History</button>
+    {% endif %}
   </div>
   <div class="terminal-history">
     <div class="terminal-history-body">
@@ -194,6 +197,26 @@
       setTimeout(function() { btn.textContent = orig; }, 1500);
     });
   });
+
+  /* Clear history button */
+  const clearBtn = document.getElementById('btn-clear-history');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', function() {
+      if (!confirm('Clear all command history for this host?')) return;
+      fetch('{{ url_for("main.clear_ssh_history", host_id=host.id) }}', {
+        method: 'POST',
+        headers: { 'X-CSRFToken': '{{ csrf_token() }}' },
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.success) {
+          const section = clearBtn.closest('section');
+          if (section) section.remove();
+        }
+      })
+      .catch(function(e) { alert('Error clearing history: ' + e); });
+    });
+  }
 })();
 </script>
 {% endblock %}

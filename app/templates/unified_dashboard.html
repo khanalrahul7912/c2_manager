@@ -213,19 +213,21 @@
       </thead>
       <tbody>
         {% for host in ssh_hosts %}
-        <tr>
+        <tr class="clickable-row" onclick="toggleRowCheckbox(event, 'ssh', {{ host.id }})">
           <td><input type="checkbox" class="select-checkbox ssh-item-checkbox" data-id="{{ host.id }}" onchange="updateBulkBar('ssh')"></td>
-          <td><strong>{{ host.name }}</strong></td>
+          <td><a href="{{ url_for('main.host_detail', host_id=host.id) }}" class="host-link" onclick="event.stopPropagation()"><strong>{{ host.name }}</strong></a></td>
           <td>{{ host.group_name }}</td>
           <td><code>{{ host.username }}@{{ host.address }}:{{ host.port }}</code></td>
           <td>{{ host.auth_mode }}</td>
           <td>{{ 'yes' if host.use_jump_host else 'no' }}</td>
           <td><span class="pill {{ 'success' if host.is_active else 'failed' }}">{{ 'active' if host.is_active else 'disabled' }}</span></td>
           <td>
-            <a href="{{ url_for('main.host_detail', host_id=host.id) }}" class="btn ghost" style="padding: 0.3rem 0.6rem;">Open</a>
-            {% if current_user.role == 'admin' %}
-            <a href="{{ url_for('main.edit_host', host_id=host.id) }}" class="btn ghost" style="padding: 0.3rem 0.6rem;">Edit</a>
-            {% endif %}
+            <div class="action-dropdown" onclick="event.stopPropagation()">
+              <a href="{{ url_for('main.host_detail', host_id=host.id) }}" class="btn ghost" style="padding: 0.3rem 0.6rem;">Open</a>
+              {% if current_user.role == 'admin' %}
+              <a href="{{ url_for('main.edit_host', host_id=host.id) }}" class="btn ghost" style="padding: 0.3rem 0.6rem;">Edit</a>
+              {% endif %}
+            </div>
           </td>
         </tr>
         {% else %}
@@ -357,7 +359,7 @@
       </thead>
       <tbody>
         {% for shell in shells %}
-        <tr>
+        <tr class="clickable-row" onclick="toggleRowCheckbox(event, 'shells', {{ shell.id }})">
           <td><input type="checkbox" class="select-checkbox shells-item-checkbox" data-id="{{ shell.id }}" onchange="updateBulkBar('shells')"></td>
           <td>
             {% if shell.id in active_shell_ids %}
@@ -366,11 +368,11 @@
             <span class="pill failed">○ Disconnected</span>
             {% endif %}
           </td>
-          <td><strong>{{ shell.name }}</strong></td>
+          <td><a href="{{ url_for('main.shell_detail', shell_id=shell.id) }}" class="host-link" onclick="event.stopPropagation()"><strong>{{ shell.name }}</strong></a></td>
           <td><code>{{ shell.address }}:{{ shell.port }}</code></td>
           <td>{{ shell.group_name }}</td>
           <td>{{ shell.platform or 'Unknown' }}</td>
-          <td>{{ shell.hostname or '-' }}</td>
+          <td><a href="{{ url_for('main.shell_detail', shell_id=shell.id) }}" class="host-link" onclick="event.stopPropagation()">{{ shell.hostname or '-' }}</a></td>
           <td>
             {% if shell.last_seen %}
             {{ shell.last_seen.strftime('%Y-%m-%d %H:%M:%S') }}
@@ -379,12 +381,14 @@
             {% endif %}
           </td>
           <td>
-            <a href="{{ url_for('main.shell_detail', shell_id=shell.id) }}" class="btn ghost" style="padding: 0.3rem 0.6rem;">
-              {% if shell.id in active_shell_ids %}Interact{% else %}View{% endif %}
-            </a>
-            {% if current_user.role == 'admin' %}
-            <a href="{{ url_for('main.edit_shell', shell_id=shell.id) }}" class="btn ghost" style="padding: 0.3rem 0.6rem;">Edit</a>
-            {% endif %}
+            <div class="action-dropdown" onclick="event.stopPropagation()">
+              <a href="{{ url_for('main.shell_detail', shell_id=shell.id) }}" class="btn ghost" style="padding: 0.3rem 0.6rem;">
+                {% if shell.id in active_shell_ids %}Interact{% else %}View{% endif %}
+              </a>
+              {% if current_user.role == 'admin' %}
+              <a href="{{ url_for('main.edit_shell', shell_id=shell.id) }}" class="btn ghost" style="padding: 0.3rem 0.6rem;">Edit</a>
+              {% endif %}
+            </div>
           </td>
         </tr>
         {% else %}
@@ -408,6 +412,17 @@
 
 <script>
 const CSRF_TOKEN = '{{ csrf_token() }}';
+
+// Click row to toggle checkbox (skip if clicking a link/button/checkbox)
+function toggleRowCheckbox(event, type, id) {
+  const tag = event.target.tagName.toLowerCase();
+  if (tag === 'a' || tag === 'button' || tag === 'input') return;
+  const cb = event.currentTarget.querySelector(`.${type}-item-checkbox[data-id="${id}"]`);
+  if (cb) {
+    cb.checked = !cb.checked;
+    updateBulkBar(type);
+  }
+}
 
 // Tab switching
 function switchTab(tabName) {

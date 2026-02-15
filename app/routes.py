@@ -1120,6 +1120,32 @@ def reverse_history_api(shell_id: int):
     })
 
 
+@main_bp.route("/api/clear-history/ssh/<int:host_id>", methods=["POST"])
+@login_required
+@role_required("admin")
+def clear_ssh_history(host_id: int):
+    """Clear command history for an SSH host."""
+    host = db.session.get(Host, host_id)
+    if not host:
+        return jsonify({"error": "Host not found"}), 404
+    CommandExecution.query.filter_by(host_id=host.id).delete()
+    db.session.commit()
+    return jsonify({"success": True})
+
+
+@main_bp.route("/api/clear-history/shell/<int:shell_id>", methods=["POST"])
+@login_required
+@role_required("admin")
+def clear_shell_history(shell_id: int):
+    """Clear command history for a reverse shell."""
+    shell = db.session.get(ReverseShell, shell_id)
+    if not shell:
+        return jsonify({"error": "Shell not found"}), 404
+    ShellExecution.query.filter_by(shell_id=shell.id).delete()
+    db.session.commit()
+    return jsonify({"success": True})
+
+
 @main_bp.route("/api/shell-execute/<int:shell_id>", methods=["POST"])
 @login_required
 def shell_execute_api(shell_id: int):

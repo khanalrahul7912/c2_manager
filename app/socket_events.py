@@ -311,13 +311,14 @@ def register_events(sio: SocketIO) -> None:
                             sio.emit("shell_status", {"connected": False}, to=sid)
                             break
                         else:
-                            import time
                             time.sleep(0.05)
                     except socket.timeout:
                         continue
-                    except OSError:
+                    except (OSError, EOFError, paramiko.SSHException):
                         sio.emit("shell_status", {"connected": False}, to=sid)
                         break
+            except Exception:
+                pass
             finally:
                 with _ws_lock:
                     info = _ws_sessions.get(sid)
@@ -351,7 +352,7 @@ def register_events(sio: SocketIO) -> None:
         if raw:
             try:
                 channel.send(raw)
-            except OSError:
+            except (OSError, EOFError, paramiko.SSHException):
                 emit("shell_status", {"connected": False})
 
     @sio.on("ssh_resize")

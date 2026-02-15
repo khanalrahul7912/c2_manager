@@ -193,44 +193,42 @@ class ShellListener:
         shell_id = None
         try:
             with self.app.app_context():
-                # Accept any connection that responds to a probe command.
+                # Accept any connection that exchanges data.
                 # This supports all shell types: Linux bash/sh, Windows
                 # cmd/PowerShell, macOS zsh, Python/PHP/Ruby/Java shells,
                 # netcat, and any other reverse shell payload.
-                conn.settimeout(10)
 
                 is_valid_shell = False
 
-                # Strategy: send a universal probe and accept ANY data back.
-                # We try multiple probes to cover different shell flavours.
-                probes = [
-                    b'echo SHELL_OK\n',          # Unix shells, Python pty, nc
-                    b'echo SHELL_OK\r\n',         # Windows cmd / PowerShell
-                ]
+                # Step 1: Check if the shell already sent a banner/prompt
+                # (e.g. Windows cmd banner, PowerShell prompt, motd, etc.)
+                try:
+                    conn.settimeout(3)
+                    banner = conn.recv(4096)
+                    if banner and len(banner) > 0:
+                        is_valid_shell = True
+                except (socket.timeout, OSError):
+                    pass
 
-                for probe in probes:
-                    try:
-                        conn.sendall(probe)
-                        time.sleep(1)  # Give slower shells (Windows) time to respond
-                        response = conn.recv(4096)
-                        if response and len(response) > 0:
-                            is_valid_shell = True
-                            break
-                    except socket.timeout:
-                        continue
-                    except Exception:
-                        continue
-
+                # Step 2: If no banner, send probes and wait for any reply.
                 if not is_valid_shell:
-                    # Last chance: maybe the shell already sent a banner/prompt
-                    # before we sent anything (e.g. some PHP/Ruby/Java shells).
-                    try:
-                        conn.settimeout(3)
-                        banner = conn.recv(4096)
-                        if banner and len(banner) > 0:
-                            is_valid_shell = True
-                    except Exception:
-                        pass
+                    probes = [
+                        b'echo SHELL_OK\r\n',     # Windows cmd/PowerShell + Unix
+                        b'echo SHELL_OK\n',        # Unix only fallback
+                    ]
+                    for probe in probes:
+                        try:
+                            conn.sendall(probe)
+                            time.sleep(2)  # Give slower shells time to respond
+                            conn.settimeout(5)
+                            response = conn.recv(4096)
+                            if response and len(response) > 0:
+                                is_valid_shell = True
+                                break
+                        except socket.timeout:
+                            continue
+                        except OSError:
+                            continue
 
                 if not is_valid_shell:
                     conn.close()

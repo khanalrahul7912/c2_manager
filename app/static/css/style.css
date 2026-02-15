@@ -225,6 +225,28 @@ tr:hover {
   background: #fafbfd;
 }
 
+tr.clickable-row {
+  cursor: pointer;
+}
+
+tr.clickable-row:hover {
+  background: #eef3ff;
+}
+
+.host-link {
+  color: var(--primary-color);
+  text-decoration: none;
+}
+
+.host-link:hover {
+  text-decoration: underline;
+}
+
+.action-dropdown {
+  display: inline-flex;
+  gap: 0.25rem;
+}
+
 .flashes {
   list-style: none;
   padding: 0;

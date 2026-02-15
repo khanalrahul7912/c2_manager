@@ -17,6 +17,7 @@ from flask_socketio import SocketIO, disconnect, emit
 
 from app.extensions import db
 from app.models import Host, ReverseShell
+from app.security import decrypt_secret
 from app.shell_service import get_listener
 from app.ssh_service import SSHEndpoint, _connect_client
 
@@ -56,6 +57,14 @@ def register_events(sio: SocketIO) -> None:
 
         # Mark connection as WebSocket-attached so keepalive is paused
         conn.ws_attached = True
+
+        # Apply terminal size from the client if provided
+        cols = data.get("cols", 200)
+        rows = data.get("rows", 50)
+        try:
+            conn.conn.sendall(f"stty rows {rows} cols {cols} 2>/dev/null\n".encode("utf-8"))
+        except OSError:
+            pass
 
         emit("shell_status", {"connected": True})
         emit("shell_output", {"data": "\r\n"})
@@ -156,8 +165,26 @@ def register_events(sio: SocketIO) -> None:
 
     @sio.on("reverse_resize")
     def on_reverse_resize(data: dict) -> None:
-        """Terminal resized – not applicable for raw sockets, but accepted silently."""
-        pass
+        """Terminal resized – send stty to update the shell's terminal size."""
+        sid = request.sid
+        with _ws_lock:
+            session = _ws_sessions.get(sid)
+        if not session:
+            return
+        cols = data.get("cols", 200)
+        rows = data.get("rows", 50)
+        shell_id = session.get("shell_id")
+        if not shell_id:
+            return
+        app = current_app._get_current_object()
+        listener = get_listener(app)
+        conn_obj = listener.connections.get(shell_id)
+        if not conn_obj or not conn_obj.is_active:
+            return
+        try:
+            conn_obj.conn.sendall(f"stty rows {rows} cols {cols} 2>/dev/null\n".encode("utf-8"))
+        except OSError:
+            pass
 
     @sio.on("reverse_disconnect_host")
     def on_reverse_disconnect_host(data: dict) -> None:
@@ -220,7 +247,7 @@ def register_events(sio: SocketIO) -> None:
                 port=host.port,
                 auth_mode=host.auth_mode,
                 key_path=host.key_path,
-                password=host.password_encrypted,
+                password=decrypt_secret(host.password_encrypted) if host.auth_mode == "password" else None,
             )
             jump_host = None
             if host.use_jump_host:
@@ -230,7 +257,7 @@ def register_events(sio: SocketIO) -> None:
                     port=host.jump_port or 22,
                     auth_mode=host.jump_auth_mode,
                     key_path=host.jump_key_path,
-                    password=host.jump_password_encrypted,
+                    password=decrypt_secret(host.jump_password_encrypted) if host.jump_auth_mode == "password" else None,
                 )
 
         sid = request.sid

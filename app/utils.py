@@ -65,23 +65,25 @@ def clean_shell_output(text: str, command: str = "") -> str:
     cleaned_lines = []
 
     # Pattern matching common shell prompts: user@host:path$ or [user@host path]$ etc.
-    prompt_re = re.compile(r'^\s*(\S+@\S+[:\]]\S*\s*)?[\$\#\>]\s*')
+    # The ']' is placed at the start of the character class to be treated literally.
+    prompt_re = re.compile(r'^\s*(\S+@\S+[]:]\S*\s*)?[\$\#\>]\s*')
+
+    cmd_stripped = command.strip() if command else ""
 
     for line in lines:
         stripped = line.strip()
         if not stripped:
             continue
         # Skip lines that are just a prompt (with nothing after it)
-        if re.match(r'^(\S+@\S+[:\]]\S*\s*)?[\$\#\>]\s*$', stripped):
+        if re.match(r'^(\S+@\S+[]:]\S*\s*)?[\$\#\>]\s*$', stripped):
             continue
         # Skip keepalive echo lines (prompt + # keepalive)
         if '# keepalive' in stripped:
             continue
-        # Skip the echoed command line (prompt + command)
-        if command and stripped.endswith(command.strip()):
-            # Verify it looks like a prompt echo, not real output
-            without_cmd = stripped[:-len(command.strip())].strip()
-            if not without_cmd or prompt_re.match(without_cmd):
+        # Skip the echoed command line: must be prompt + exact command
+        if cmd_stripped:
+            m = prompt_re.match(stripped)
+            if m and stripped[m.end():].strip() == cmd_stripped:
                 continue
         cleaned_lines.append(line)
 

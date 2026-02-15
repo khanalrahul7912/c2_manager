@@ -146,7 +146,7 @@ Create `/etc/nginx/sites-available/c2_manager`:
 server {
     listen 80;
     server_name your-domain.com;
-    return 301 https://$host$request_uri;
+    return 301 https://$server_name$request_uri;
 }
 
 server {

@@ -44,7 +44,7 @@ class ShellConnection:
                     return "Error: Connection is not active"
 
                 # Drain any buffered data (e.g. from keepalive prompts)
-                self.conn.settimeout(0.2)
+                self.conn.settimeout(0.5)
                 try:
                     while True:
                         leftover = self.conn.recv(4096)
@@ -84,7 +84,7 @@ class ShellConnection:
                         continue
 
                 output_str = output.decode('utf-8', errors='replace')
-                output_str = clean_shell_output(output_str)
+                output_str = clean_shell_output(output_str, command)
 
                 if timed_out:
                     # Connection is tainted – close it so it can reconnect

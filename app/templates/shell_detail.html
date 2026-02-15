@@ -1,95 +1,478 @@
 {% extends 'base.html' %}
 {% block title %}{{ shell.name }}{% endblock %}
 {% block content %}
-<section class="card">
-  <div class="card-header">
-    <h2>Shell: {{ shell.name }}</h2>
-    <div class="toolbar">
+
+{# Disconnect warning banner (hidden when connected) #}
+<div class="term-disconnect-banner" id="term-disconnect-banner" {% if is_connected %}style="display:none"{% endif %}>
+  <span class="warn-icon">⚠️</span>
+  <span class="warn-text">
+    <strong>Shell is disconnected</strong>
+    <small>Terminal resumes on reconnection. Press Ctrl+Shift+R to retry.</small>
+  </span>
+</div>
+
+{# Real-time xterm.js terminal with tabs #}
+<div class="term-wrap" id="term-wrap">
+  <div class="term-titlebar">
+    <div class="term-dots"><span class="d-r"></span><span class="d-y"></span><span class="d-g"></span></div>
+    <span class="term-title">{{ shell.shell_user or 'shell' }}@{{ shell.hostname or shell.address }} — {{ shell.platform or 'Reverse Shell' }} [{{ shell.address }}:{{ shell.port }}]</span>
+    <span class="term-status">
+      <span class="term-dot {% if is_connected %}online{% else %}offline{% endif %}" id="term-status-dot"></span>
+      <span id="term-status-text">{% if is_connected %}Connected{% else %}Disconnected{% endif %}</span>
+    </span>
+    <div class="term-actions">
+      <button type="button" id="btn-persist" title="Enable persistence (cron reconnect)" class="btn ghost persist-badge inactive">🔒 Persist</button>
+      <button type="button" id="btn-unpersist" title="Remove persistence" class="btn ghost" style="font-size:0.68rem;padding:0.15rem 0.4rem;display:none;">🔓 Unpersist</button>
+      <button type="button" id="btn-fullscreen" title="Toggle fullscreen (F11)">⛶</button>
+      <button type="button" id="btn-reconnect" title="Reconnect terminal (Ctrl+Shift+R)">🔄</button>
+      <button type="button" id="btn-copy" title="Copy terminal output (Ctrl+Shift+C)">📋</button>
+      <button type="button" id="btn-disconnect" title="Disconnect shell">⏏</button>
       {% if current_user.role == 'admin' %}
-      <a href="{{ url_for('main.edit_shell', shell_id=shell.id) }}" class="btn ghost">Edit</a>
+      <a href="{{ url_for('main.edit_shell', shell_id=shell.id) }}" class="btn ghost" style="font-size:0.68rem;padding:0.15rem 0.4rem;">Edit</a>
       {% endif %}
-      <a href="{{ url_for('main.shells_dashboard') }}" class="btn ghost">Back to Shells</a>
     </div>
   </div>
+  <div class="term-tab-bar" id="term-tab-bar">
+    <button class="term-tab active" data-tab="0">Session 1</button>
+    <button class="term-tab-add" id="btn-new-tab" title="New session tab (Ctrl+Shift+T)">+</button>
+  </div>
+  <div id="xterm-container" style="background:#080a08;"></div>
+</div>
 
-  <table>
-    <tr>
-      <th style="width: 200px;">Status</th>
-      <td>
-        {% if is_connected %}
-        <span class="pill success">● Connected</span>
-        {% else %}
-        <span class="pill failed">○ Disconnected</span>
-        {% endif %}
-      </td>
-    </tr>
-    <tr><th>Address</th><td><code>{{ shell.address }}:{{ shell.port }}</code></td></tr>
-    <tr><th>Group</th><td>{{ shell.group_name }}</td></tr>
-    <tr><th>Platform</th><td>{{ shell.platform or 'Unknown' }}</td></tr>
-    <tr><th>Hostname</th><td>{{ shell.hostname or '-' }}</td></tr>
-    <tr><th>Connected At</th><td>{{ shell.connected_at.strftime('%Y-%m-%d %H:%M:%S') if shell.connected_at else 'Never' }}</td></tr>
-    <tr><th>Last Seen</th><td>{{ shell.last_seen.strftime('%Y-%m-%d %H:%M:%S') if shell.last_seen else 'Never' }}</td></tr>
-    <tr><th>Disconnected At</th><td>{{ shell.disconnected_at.strftime('%Y-%m-%d %H:%M:%S') if shell.disconnected_at else '-' }}</td></tr>
-  </table>
-</section>
-
-{% if is_connected %}
-<section class="card" style="margin-top: 1rem;">
-  <h3>Execute Command</h3>
-  <form method="post">
-    {{ form.hidden_tag() }}
-    <label>{{ form.command.label }}
-      {{ form.command(rows=6, placeholder='whoami\nls -la\npwd', class_='command-input') }}
-    </label>
-    {{ form.submit(class_='btn') }}
-  </form>
-  <p style="margin-top: 0.5rem; color: #666; font-size: 0.9rem;">
-    💡 Tip: Enter commands as you would in a terminal. Output will appear below.
-  </p>
-</section>
-{% else %}
-<section class="card" style="margin-top: 1rem;">
-  <h3>Shell Offline</h3>
-  <p>This shell is not currently connected. Commands cannot be executed until it reconnects.</p>
+{% if old_executions %}
+<button class="scroll-to-history" onclick="document.getElementById('history-section').scrollIntoView({behavior:'smooth'})">
+  ↓ Scroll to command history ({{ old_executions|length }} entries)
+</button>
+<section class="card" id="history-section" style="margin-top:0.5rem;">
+  <div class="card-header">
+    <h3>Command History (older sessions)</h3>
+    {% if current_user.role == 'admin' %}
+    <button type="button" class="btn ghost" id="btn-clear-history" style="color:var(--danger-color);">🗑️ Clear History</button>
+    {% endif %}
+  </div>
+  <div class="terminal-history">
+    <div class="terminal-history-body">
+      {% for run in old_executions %}
+      <div class="terminal-entry">
+        <div class="terminal-entry-meta">
+          <span class="pill {{ run.status }}">{{ run.status }}</span>
+          <span>{{ run.started_at.strftime('%Y-%m-%d %H:%M:%S') }}</span>
+        </div>
+        <div class="terminal-prompt">{{ run.command }}</div>
+        {% if run.output %}<div class="terminal-stdout">{{ run.output }}</div>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
 </section>
 {% endif %}
 
-<section class="card" style="margin-top: 1rem;">
-  <h3>Command History</h3>
-  
-  {% for exec in executions %}
-  <div class="execution">
-    <header>
-      <span class="pill {{ exec.status }}">{{ exec.status }}</span>
-      <span>{{ exec.started_at.strftime('%Y-%m-%d %H:%M:%S') }}</span>
-      <span>by {{ exec.user.username }}</span>
-      {% if exec.completed_at %}
-      <span>({{ ((exec.completed_at - exec.started_at).total_seconds()) | round(2) }}s)</span>
-      {% endif %}
-    </header>
-    <div style="margin-top: 0.5rem;">
-      <strong>Command:</strong>
-      <pre style="margin-top: 0.3rem;">{{ exec.command }}</pre>
-    </div>
-    {% if exec.output %}
-    <div style="margin-top: 0.5rem;">
-      <strong>Output:</strong>
-      <pre style="margin-top: 0.3rem;">{{ exec.output }}</pre>
-    </div>
-    {% endif %}
-  </div>
-  {% else %}
-  <p>No command history yet.</p>
-  {% endfor %}
+{# xterm.js local vendor files #}
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/xterm.css') }}">
+<script src="{{ url_for('static', filename='vendor/xterm.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/addon-fit.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/addon-web-links.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/socket.io.min.js') }}"></script>
+<script>
+(function() {
+  'use strict';
 
-  <div class="pagination-row">
-    {% if executions_pagination.has_prev %}
-    <a class="btn ghost" href="{{ url_for('main.shell_detail', shell_id=shell.id, page=executions_pagination.prev_num) }}">Prev</a>
-    {% endif %}
-    <span>Page {{ executions_pagination.page }} / {{ executions_pagination.pages or 1 }}</span>
-    {% if executions_pagination.has_next %}
-    <a class="btn ghost" href="{{ url_for('main.shell_detail', shell_id=shell.id, page=executions_pagination.next_num) }}">Next</a>
-    {% endif %}
-  </div>
-</section>
+  const SHELL_ID = {{ shell.id }};
+  const IS_CONNECTED = {{ 'true' if is_connected else 'false' }};
+  const SHELL_LABEL = '{{ shell.shell_user or "shell" }}@{{ shell.hostname or shell.address }}';
+
+  /* ── Tab management ── */
+  const tabs = [];
+  let activeTabId = -1;
+  let nextTabId = 0;
+  const tabBar = document.getElementById('term-tab-bar');
+  const termContainer = document.getElementById('xterm-container');
+
+  /* ── Status UI ── */
+  const statusDot = document.getElementById('term-status-dot');
+  const statusText = document.getElementById('term-status-text');
+  const banner = document.getElementById('term-disconnect-banner');
+
+  function setStatus(connected) {
+    if (statusDot) statusDot.className = 'term-dot ' + (connected ? 'online' : 'offline');
+    if (statusText) statusText.textContent = connected ? 'Connected' : 'Disconnected';
+    if (banner) banner.style.display = connected ? 'none' : 'flex';
+  }
+
+  function getActiveTab() {
+    return tabs.find(function(t) { return t.id === activeTabId; });
+  }
+
+  /* Create xterm.js terminal options */
+  function makeTermOpts() {
+    return {
+      cursorBlink: true,
+      fontSize: 14,
+      fontFamily: "'JetBrains Mono', 'SF Mono', Monaco, Menlo, 'Courier New', monospace",
+      theme: {
+        background: '#080a08',
+        foreground: '#c0ffc0',
+        cursor: '#00ff41',
+        cursorAccent: '#080a08',
+        selectionBackground: '#1a4a1a',
+        black: '#0a0e0a', red: '#ff003c', green: '#00ff41', yellow: '#ffb700',
+        blue: '#0ff', magenta: '#ff6090', cyan: '#0ff', white: '#c0ffc0',
+      },
+      scrollback: 10000,
+      allowProposedApi: true,
+    };
+  }
+
+  /* Status polling for disconnected shells */
+  let pollTimer = null;
+  function startStatusPolling(tab) {
+    if (pollTimer) return;
+    pollTimer = setInterval(function() {
+      fetch('{{ url_for("main.shell_status_api", shell_id=shell.id) }}')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          if (d.connected) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+            tab.connected = true;
+            setStatus(true);
+            tab.term.write('\r\n✓ Shell reconnected!\r\n');
+            tab.socket.emit('reverse_connect', { shell_id: SHELL_ID, cols: tab.term.cols, rows: tab.term.rows });
+          }
+        })
+        .catch(function() {});
+    }, 5000);
+  }
+
+  /* Create a new terminal tab */
+  function createTab() {
+    const id = nextTabId++;
+    const num = tabs.length + 1;
+
+    /* ── Pane ── */
+    const pane = document.createElement('div');
+    pane.className = 'xterm-tab-pane';
+    pane.style.display = 'none';
+    pane.style.background = '#080a08';
+    termContainer.appendChild(pane);
+
+    /* ── xterm ── */
+    const term = new window.Terminal(makeTermOpts());
+    const fitAddon = new window.FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    try {
+      const webLinksAddon = new window.WebLinksAddon.WebLinksAddon();
+      term.loadAddon(webLinksAddon);
+    } catch(e) {}
+    term.open(pane);
+
+    /* ── SocketIO connection ── */
+    const sock = io({ transports: ['polling', 'websocket'] });
+    const tab = { id: id, term: term, fitAddon: fitAddon, socket: sock, connected: false, pane: pane, el: null };
+
+    /* Wire events */
+    sock.on('connect', function() {
+      if (IS_CONNECTED || tab.connected) {
+        term.write('\r\nConnecting to ' + SHELL_LABEL + ' (Session ' + num + ')...\r\n');
+        sock.emit('reverse_connect', { shell_id: SHELL_ID, cols: term.cols, rows: term.rows });
+      }
+    });
+
+    sock.on('shell_output', function(data) {
+      if (data.data) term.write(data.data);
+    });
+
+    sock.on('shell_status', function(data) {
+      tab.connected = data.connected;
+      if (tab.id === activeTabId) setStatus(data.connected);
+      if (!data.connected) startStatusPolling(tab);
+    });
+
+    term.onData(function(data) {
+      if (tab.connected) sock.emit('reverse_input', { data: data });
+    });
+
+    term.onResize(function(size) {
+      sock.emit('reverse_resize', { cols: size.cols, rows: size.rows });
+    });
+
+    /* Keyboard shortcuts */
+    term.attachCustomKeyEventHandler(function(e) {
+      if (e.type !== 'keydown') return true;
+      const ctrl = e.ctrlKey, shift = e.shiftKey;
+      if (ctrl && shift) {
+        switch (e.key) {
+          case 'C':
+            e.preventDefault();
+            const sel = term.getSelection();
+            if (sel) navigator.clipboard.writeText(sel);
+            return false;
+          case 'V':
+            e.preventDefault();
+            navigator.clipboard.readText().then(function(text) {
+              if (tab.connected) sock.emit('reverse_input', { data: text });
+            }).catch(function() {});
+            return false;
+          case 'T':
+            e.preventDefault();
+            createTab();
+            return false;
+          case 'W':
+            e.preventDefault();
+            closeTab(tab.id);
+            return false;
+          case 'R':
+            e.preventDefault();
+            reconnectTab(tab);
+            return false;
+        }
+        const n = parseInt(e.key, 10);
+        if (n >= 1 && n <= 9 && n <= tabs.length) {
+          e.preventDefault();
+          switchTab(tabs[n - 1].id);
+          return false;
+        }
+      }
+      return true;
+    });
+
+    /* ── Tab button ── */
+    const tabBtn = document.createElement('button');
+    tabBtn.className = 'term-tab';
+    tabBtn.setAttribute('data-tab', id);
+    tabBtn.innerHTML = 'Session ' + num + ' <span class="tab-close" title="Close tab">&times;</span>';
+    tabBtn.addEventListener('click', function(e) {
+      if (e.target.classList.contains('tab-close')) {
+        closeTab(id);
+      } else {
+        switchTab(id);
+      }
+    });
+    tab.el = tabBtn;
+
+    tabBar.insertBefore(tabBtn, document.getElementById('btn-new-tab'));
+    tabs.push(tab);
+    switchTab(id);
+
+    if (!IS_CONNECTED) {
+      term.write('\r\n⚠ Shell is disconnected. Waiting for reconnection...\r\n');
+      startStatusPolling(tab);
+    }
+
+    return tab;
+  }
+
+  function switchTab(id) {
+    tabs.forEach(function(t) {
+      const isActive = t.id === id;
+      t.pane.style.display = isActive ? 'block' : 'none';
+      t.el.classList.toggle('active', isActive);
+      if (isActive) {
+        t.fitAddon.fit();
+        t.term.focus();
+        setStatus(t.connected);
+      }
+    });
+    activeTabId = id;
+  }
+
+  function closeTab(id) {
+    if (tabs.length <= 1) return;
+    const idx = tabs.findIndex(function(t) { return t.id === id; });
+    if (idx < 0) return;
+    const tab = tabs[idx];
+    tab.socket.emit('reverse_disconnect_host', { shell_id: SHELL_ID });
+    tab.socket.disconnect();
+    tab.term.dispose();
+    tab.pane.remove();
+    tab.el.remove();
+    tabs.splice(idx, 1);
+    if (activeTabId === id) {
+      switchTab(tabs[Math.min(idx, tabs.length - 1)].id);
+    }
+  }
+
+  function reconnectTab(tab) {
+    if (!tab) tab = getActiveTab();
+    if (!tab) return;
+    tab.term.write('\r\n--- Reconnecting ---\r\n');
+    fetch('{{ url_for("main.shell_status_api", shell_id=shell.id) }}')
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.connected) {
+          tab.connected = true;
+          setStatus(true);
+          tab.socket.emit('reverse_connect', { shell_id: SHELL_ID, cols: tab.term.cols, rows: tab.term.rows });
+          tab.term.write('\r\n✓ Reconnected!\r\n');
+        } else {
+          tab.term.write('\r\n⚠ Shell is still disconnected\r\n');
+          startStatusPolling(tab);
+        }
+      })
+      .catch(function() { tab.term.write('\r\n⚠ Could not check status\r\n'); });
+  }
+
+  /* Remove default first tab button */
+  const defaultTabBtn = tabBar.querySelector('[data-tab="0"]');
+  if (defaultTabBtn) defaultTabBtn.remove();
+
+  /* Create first tab */
+  createTab();
+
+  /* Resize on window resize */
+  window.addEventListener('resize', function() {
+    const tab = getActiveTab();
+    if (tab) tab.fitAddon.fit();
+  });
+
+  /* ── Fullscreen ── */
+  document.getElementById('btn-fullscreen').addEventListener('click', function() {
+    const wrap = document.getElementById('term-wrap');
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else if (wrap.classList.contains('fullscreen')) {
+      /* Exit CSS fallback fullscreen */
+      wrap.classList.remove('fullscreen');
+      setTimeout(function() {
+        const tab = getActiveTab();
+        if (tab) tab.fitAddon.fit();
+      }, 200);
+    } else {
+      wrap.requestFullscreen().then(function() {
+        setTimeout(function() {
+          const tab = getActiveTab();
+          if (tab) tab.fitAddon.fit();
+        }, 200);
+      }).catch(function() {
+        /* Fallback: use CSS class */
+        wrap.classList.add('fullscreen');
+        setTimeout(function() {
+          const tab = getActiveTab();
+          if (tab) tab.fitAddon.fit();
+        }, 200);
+      });
+    }
+  });
+  document.addEventListener('fullscreenchange', function() {
+    setTimeout(function() {
+      const tab = getActiveTab();
+      if (tab) tab.fitAddon.fit();
+    }, 200);
+  });
+
+  /* ── New tab button ── */
+  document.getElementById('btn-new-tab').addEventListener('click', function() { createTab(); });
+
+  /* ── Top bar buttons ── */
+  document.getElementById('btn-disconnect').addEventListener('click', function() {
+    const tab = getActiveTab();
+    if (!tab) return;
+    if (confirm('Forcefully disconnect this shell?')) {
+      tab.socket.emit('reverse_disconnect_host', { shell_id: SHELL_ID });
+      tab.connected = false;
+      setStatus(false);
+    }
+  });
+
+  document.getElementById('btn-reconnect').addEventListener('click', function() { reconnectTab(); });
+
+  document.getElementById('btn-copy').addEventListener('click', function() {
+    const tab = getActiveTab();
+    if (!tab) return;
+    const text = (function() {
+      const lines = [];
+      for (let i = 0; i < tab.term.buffer.active.length; i++) {
+        const line = tab.term.buffer.active.getLine(i);
+        if (line) lines.push(line.translateToString(true));
+      }
+      return lines.join('\n');
+    })();
+    navigator.clipboard.writeText(text).then(function() {
+      const btn = document.getElementById('btn-copy');
+      const orig = btn.textContent;
+      btn.textContent = '✓ Copied!';
+      setTimeout(function() { btn.textContent = orig; }, 1500);
+    });
+  });
+
+  /* Clear history button */
+  const clearBtn = document.getElementById('btn-clear-history');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', function() {
+      if (!confirm('Clear all command history for this shell?')) return;
+      fetch('{{ url_for("main.clear_shell_history", shell_id=shell.id) }}', {
+        method: 'POST',
+        headers: { 'X-CSRFToken': '{{ csrf_token() }}' },
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.success) {
+          const section = clearBtn.closest('section');
+          if (section) section.remove();
+          const scrollBtn = document.querySelector('.scroll-to-history');
+          if (scrollBtn) scrollBtn.remove();
+        }
+      })
+      .catch(function(e) { alert('Error clearing history: ' + e); });
+    });
+  }
+  /* Persistence buttons */
+  document.getElementById('btn-persist').addEventListener('click', function() {
+    const lhost = prompt('Enter your listener IP (LHOST) for reconnection:');
+    if (!lhost) return;
+    const lport = prompt('Enter your listener port (LPORT):', '5000');
+    if (!lport) return;
+    const btn = this;
+    btn.textContent = '⏳ Setting up...';
+    btn.disabled = true;
+    fetch('{{ url_for("main.shell_persistence_api", shell_id=shell.id) }}', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' },
+      body: JSON.stringify({ action: 'enable', lhost: lhost, lport: lport })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.success) {
+        btn.textContent = '🔒 Persistent';
+        btn.classList.remove('inactive');
+        btn.classList.add('active');
+        document.getElementById('btn-unpersist').style.display = '';
+        alert(d.message);
+      } else {
+        btn.textContent = '🔒 Persist';
+        alert('Failed: ' + (d.error || d.message || 'Unknown error'));
+      }
+      btn.disabled = false;
+    })
+    .catch(function(e) { btn.textContent = '🔒 Persist'; btn.disabled = false; alert('Error: ' + e); });
+  });
+
+  document.getElementById('btn-unpersist').addEventListener('click', function() {
+    if (!confirm('Remove persistence from this shell?')) return;
+    const btn = this;
+    btn.disabled = true;
+    fetch('{{ url_for("main.shell_persistence_api", shell_id=shell.id) }}', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' },
+      body: JSON.stringify({ action: 'remove' })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.success) {
+        btn.style.display = 'none';
+        var persistBtn = document.getElementById('btn-persist');
+        persistBtn.textContent = '🔒 Persist';
+        persistBtn.classList.remove('active');
+        persistBtn.classList.add('inactive');
+        alert(d.message);
+      } else {
+        alert('Failed: ' + (d.error || 'Unknown error'));
+      }
+      btn.disabled = false;
+    })
+    .catch(function(e) { btn.disabled = false; alert('Error: ' + e); });
+  });
+
+})();
+</script>
 {% endblock %}

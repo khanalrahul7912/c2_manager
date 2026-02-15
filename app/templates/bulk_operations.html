@@ -1,48 +1,159 @@
 {% extends 'base.html' %}
-{% block title %}Bulk operations{% endblock %}
+{% block title %}Bulk Operations{% endblock %}
 {% block content %}
-<section class="card">
-  <h2>Bulk command execution (SSH)</h2>
-  <form method="post">
-    {{ form.hidden_tag() }}
-    <label>{{ form.host_ids.label }}
-      {{ form.host_ids(size=12, class_='multi-select') }}
-    </label>
-    <label>{{ form.command.label }} {{ form.command(rows=4, placeholder='uptime') }}</label>
-    {{ form.submit(class_='btn') }}
-  </form>
-</section>
 
-<section class="card">
-  <h3>Recent operations</h3>
-  <div class="toolbar" style="margin-bottom: 1rem;">
-    <a href="{{ url_for('main.export_ssh_executions') }}" class="btn ghost">Export CSV</a>
-  </div>
-  <table>
-    <thead><tr><th>Host</th><th>Status</th><th>Started</th><th>Command</th><th>stderr</th></tr></thead>
-    <tbody>
-      {% for run in recent_bulk %}
-      <tr>
-        <td>{{ run.host.name }}</td>
-        <td><span class="pill {{ run.status }}">{{ run.status }}</span></td>
-        <td>{{ run.started_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
-        <td><code>{{ run.command }}</code></td>
-        <td><code>{{ run.stderr[:140] }}</code></td>
-      </tr>
-      {% else %}
-      <tr><td colspan="5">No operation history yet.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+{# All styles are now in style.css #}
 
-  <div class="pagination-row">
-    {% if runs_pagination.has_prev %}
-    <a class="btn ghost" href="{{ url_for('main.bulk_operations', page=runs_pagination.prev_num) }}">Prev</a>
-    {% endif %}
-    <span>Page {{ runs_pagination.page }} / {{ runs_pagination.pages or 1 }}</span>
-    {% if runs_pagination.has_next %}
-    <a class="btn ghost" href="{{ url_for('main.bulk_operations', page=runs_pagination.next_num) }}">Next</a>
-    {% endif %}
+<div class="tabs-container">
+  <div class="bulk-tabs">
+    <button class="bulk-tab {% if view_type == 'shells' %}active{% endif %}" onclick="switchBulkTab('shells')">
+      🔌 Reverse Shell
+    </button>
+    <button class="bulk-tab {% if view_type == 'ssh' %}active{% endif %}" onclick="switchBulkTab('ssh')">
+      🖥️ SSH Shell
+    </button>
   </div>
-</section>
+
+  <!-- Reverse Shell Bulk Operations Tab -->
+  <div id="shells-bulk-tab" class="bulk-tab-content {% if view_type == 'shells' %}active{% endif %}">
+    <section class="card" style="border-radius: 0; box-shadow: none;">
+      <h2>Bulk Command Execution (Reverse Shell)</h2>
+      <form method="post" action="{{ url_for('main.bulk_operations', view='shells') }}">
+        {{ shell_form.hidden_tag() }}
+        <label>{{ shell_form.shell_ids.label }}
+          {{ shell_form.shell_ids(size=12, class_='multi-select') }}
+        </label>
+        <label>{{ shell_form.command.label }} {{ shell_form.command(rows=4, placeholder='whoami', class_='command-input') }}</label>
+        {{ shell_form.submit(class_='btn') }}
+      </form>
+    </section>
+
+    <section class="card" style="margin-top: 1rem;">
+      <div class="card-header">
+        <h3>Recent Shell Operations</h3>
+        <div class="toolbar">
+          <a href="{{ url_for('main.export_shell_executions') }}" class="btn ghost" title="Download CSV">📥 CSV</a>
+          <a href="{{ url_for('main.export_commands', format='json') }}?type=shell" class="btn ghost" title="Download JSON">📥 JSON</a>
+        </div>
+      </div>
+      <table class="bulk-results-table">
+        <thead>
+          <tr>
+            <th>Target</th>
+            <th>Status</th>
+            <th>Started</th>
+            <th>Duration</th>
+            <th>Command</th>
+            <th>Output Preview</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for run in shell_recent_bulk %}
+          <tr>
+            <td><a href="{{ url_for('main.shell_detail', shell_id=run.shell.id) }}">{{ run.shell.name }}</a></td>
+            <td><span class="pill {{ run.status }}">{{ run.status }}</span></td>
+            <td>{{ run.started_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+            <td>
+              {% if run.completed_at and run.started_at %}
+              {{ ((run.completed_at - run.started_at).total_seconds()) | round(2) }}s
+              {% else %}-{% endif %}
+            </td>
+            <td><code>{{ run.command[:80] }}{% if run.command|length > 80 %}…{% endif %}</code></td>
+            <td class="output-preview"><code>{{ (run.output or '')[:100] }}{% if (run.output or '')|length > 100 %}…{% endif %}</code></td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6">No operation history yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <div class="pagination-row">
+        {% if shell_runs_pagination.has_prev %}
+        <a class="btn ghost" href="{{ url_for('main.bulk_operations', view='shells', shell_page=shell_runs_pagination.prev_num) }}">Prev</a>
+        {% endif %}
+        <span>Page {{ shell_runs_pagination.page }} / {{ shell_runs_pagination.pages or 1 }}</span>
+        {% if shell_runs_pagination.has_next %}
+        <a class="btn ghost" href="{{ url_for('main.bulk_operations', view='shells', shell_page=shell_runs_pagination.next_num) }}">Next</a>
+        {% endif %}
+      </div>
+    </section>
+  </div>
+
+  <!-- SSH Bulk Operations Tab -->
+  <div id="ssh-bulk-tab" class="bulk-tab-content {% if view_type == 'ssh' %}active{% endif %}">
+    <section class="card" style="border-radius: 0; box-shadow: none;">
+      <h2>Bulk Command Execution (SSH Shell)</h2>
+      <form method="post" action="{{ url_for('main.bulk_operations', view='ssh') }}">
+        {{ ssh_form.hidden_tag() }}
+        <label>{{ ssh_form.host_ids.label }}
+          {{ ssh_form.host_ids(size=12, class_='multi-select') }}
+        </label>
+        <label>{{ ssh_form.command.label }} {{ ssh_form.command(rows=4, placeholder='uptime', class_='command-input') }}</label>
+        {{ ssh_form.submit(class_='btn') }}
+      </form>
+    </section>
+
+    <section class="card" style="margin-top: 1rem;">
+      <div class="card-header">
+        <h3>Recent SSH Operations</h3>
+        <div class="toolbar">
+          <a href="{{ url_for('main.export_ssh_executions') }}" class="btn ghost" title="Download CSV">📥 CSV</a>
+          <a href="{{ url_for('main.export_commands', format='json') }}?type=ssh" class="btn ghost" title="Download JSON">📥 JSON</a>
+        </div>
+      </div>
+      <table class="bulk-results-table">
+        <thead>
+          <tr>
+            <th>Target</th>
+            <th>Status</th>
+            <th>Started</th>
+            <th>Duration</th>
+            <th>Command</th>
+            <th>Output Preview</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for run in ssh_recent_bulk %}
+          <tr>
+            <td><a href="{{ url_for('main.host_detail', host_id=run.host.id) }}">{{ run.host.name }}</a></td>
+            <td><span class="pill {{ run.status }}">{{ run.status }}</span></td>
+            <td>{{ run.started_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+            <td>
+              {% if run.completed_at and run.started_at %}
+              {{ ((run.completed_at - run.started_at).total_seconds()) | round(2) }}s
+              {% else %}-{% endif %}
+            </td>
+            <td><code>{{ run.command[:80] }}{% if run.command|length > 80 %}…{% endif %}</code></td>
+            <td class="output-preview"><code>{{ (run.stdout or '')[:100] }}{% if (run.stdout or '')|length > 100 %}…{% endif %}{% if run.stderr %} <span style="color:var(--danger-color)">{{ run.stderr[:60] }}</span>{% endif %}</code></td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6">No operation history yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <div class="pagination-row">
+        {% if ssh_runs_pagination.has_prev %}
+        <a class="btn ghost" href="{{ url_for('main.bulk_operations', view='ssh', ssh_page=ssh_runs_pagination.prev_num) }}">Prev</a>
+        {% endif %}
+        <span>Page {{ ssh_runs_pagination.page }} / {{ ssh_runs_pagination.pages or 1 }}</span>
+        {% if ssh_runs_pagination.has_next %}
+        <a class="btn ghost" href="{{ url_for('main.bulk_operations', view='ssh', ssh_page=ssh_runs_pagination.next_num) }}">Next</a>
+        {% endif %}
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+function switchBulkTab(tabName) {
+  const url = new URL(window.location);
+  url.searchParams.set('view', tabName);
+  window.history.pushState({}, '', url);
+
+  document.querySelectorAll('.bulk-tab').forEach(tab => tab.classList.remove('active'));
+  document.querySelectorAll('.bulk-tab-content').forEach(content => content.classList.remove('active'));
+
+  document.querySelector(`.bulk-tab:nth-child(${tabName === 'shells' ? 1 : 2})`).classList.add('active');
+  document.getElementById(`${tabName}-bulk-tab`).classList.add('active');
+}
+</script>
 {% endblock %}

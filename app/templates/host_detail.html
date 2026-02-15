@@ -1,50 +1,381 @@
 {% extends 'base.html' %}
-{% block title %}Host {{ host.name }}{% endblock %}
+{% block title %}{{ host.name }}{% endblock %}
 {% block content %}
-<section class="card">
-  <h2>{{ host.name }}</h2>
-  <p><strong>Endpoint:</strong> {{ host.username }}@{{ host.address }}:{{ host.port }}</p>
-  <p><strong>Group:</strong> {{ host.group_name }} | <strong>Auth:</strong> {{ host.auth_mode }} | <strong>Strict host key:</strong> {{ 'enabled' if host.strict_host_key else 'disabled' }}</p>
-  <p><strong>Jump host:</strong> {{ host.jump_username }}@{{ host.jump_address }}:{{ host.jump_port }}{% if not host.use_jump_host %} (disabled){% endif %}</p>
-  <form method="post">
-    {{ form.hidden_tag() }}
-    <label>{{ form.command.label }} {{ form.command(rows=4, placeholder='uname -a') }}</label>
-    {{ form.submit(class_='btn') }}
-  </form>
-</section>
 
-<section class="card">
-  <h3>Execution history</h3>
-  {% for run in executions %}
-  <article class="execution">
-    <header>
-      <code>{{ run.command }}</code>
-      <span class="pill {{ run.status }}">{{ run.status }}</span>
-      <small>{{ run.started_at.strftime('%Y-%m-%d %H:%M:%S') }}</small>
-    </header>
-    <div class="output-grid">
-      <div>
-        <h4>stdout</h4>
-        <pre>{{ run.stdout }}</pre>
-      </div>
-      <div>
-        <h4>stderr</h4>
-        <pre>{{ run.stderr }}</pre>
-      </div>
+{# Disconnect warning banner (hidden initially) #}
+<div class="term-disconnect-banner" id="term-disconnect-banner" style="display:none">
+  <span class="warn-icon">⚠️</span>
+  <span class="warn-text">
+    <strong>SSH session disconnected</strong>
+    <small>Press Ctrl+Shift+R or click 🔄 to reconnect.</small>
+  </span>
+</div>
+
+{# Real-time xterm.js terminal with tabs #}
+<div class="term-wrap" id="term-wrap">
+  <div class="term-titlebar">
+    <div class="term-dots"><span class="d-r"></span><span class="d-y"></span><span class="d-g"></span></div>
+    <span class="term-title">{{ host.username }}@{{ host.address }}:{{ host.port }} — SSH {% if host.use_jump_host %}(via {{ host.jump_address }}){% endif %}</span>
+    <span class="term-status">
+      <span class="term-dot online" id="term-status-dot"></span>
+      <span id="term-status-text">Connecting…</span>
+    </span>
+    <div class="term-actions">
+      <button type="button" id="btn-fullscreen" title="Toggle fullscreen (F11)">⛶</button>
+      <button type="button" id="btn-reconnect" title="Reconnect SSH session (Ctrl+Shift+R)">🔄</button>
+      <button type="button" id="btn-copy" title="Copy terminal output (Ctrl+Shift+C)">📋</button>
+      <button type="button" id="btn-disconnect" title="Close SSH session">⏏</button>
+      <a href="{{ url_for('main.edit_host', host_id=host.id) }}" class="btn ghost" style="font-size:0.68rem;padding:0.15rem 0.4rem;">Edit</a>
     </div>
-  </article>
-  {% else %}
-  <p>No commands executed on this host yet.</p>
-  {% endfor %}
+  </div>
+  <div class="term-tab-bar" id="term-tab-bar">
+    <button class="term-tab active" data-tab="0">Session 1</button>
+    <button class="term-tab-add" id="btn-new-tab" title="New SSH tab (Ctrl+Shift+T)">+</button>
+  </div>
+  <div id="xterm-container" style="background:#080a08;"></div>
+</div>
 
-  <div class="pagination-row">
-    {% if executions_pagination.has_prev %}
-    <a class="btn ghost" href="{{ url_for('main.host_detail', host_id=host.id, page=executions_pagination.prev_num) }}">Prev</a>
-    {% endif %}
-    <span>Page {{ executions_pagination.page }} / {{ executions_pagination.pages or 1 }}</span>
-    {% if executions_pagination.has_next %}
-    <a class="btn ghost" href="{{ url_for('main.host_detail', host_id=host.id, page=executions_pagination.next_num) }}">Next</a>
+{% if old_executions %}
+<button class="scroll-to-history" onclick="document.getElementById('history-section').scrollIntoView({behavior:'smooth'})">
+  ↓ Scroll to command history ({{ old_executions|length }} entries)
+</button>
+<section class="card" id="history-section" style="margin-top:0.5rem;">
+  <div class="card-header">
+    <h3>Command History (older sessions)</h3>
+    {% if current_user.role == 'admin' %}
+    <button type="button" class="btn ghost" id="btn-clear-history" style="color:var(--danger-color);">🗑️ Clear History</button>
     {% endif %}
   </div>
+  <div class="terminal-history">
+    <div class="terminal-history-body">
+      {% for run in old_executions %}
+      <div class="terminal-entry">
+        <div class="terminal-entry-meta">
+          <span class="pill {{ run.status }}">{{ run.status }}</span>
+          <span>{{ run.started_at.strftime('%Y-%m-%d %H:%M:%S') }}</span>
+        </div>
+        <div class="terminal-prompt">{{ run.command }}</div>
+        {% if run.stdout %}<div class="terminal-stdout">{{ run.stdout }}</div>{% endif %}
+        {% if run.stderr %}<div class="terminal-stderr">{{ run.stderr }}</div>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
 </section>
+{% endif %}
+
+{# xterm.js local vendor files #}
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/xterm.css') }}">
+<script src="{{ url_for('static', filename='vendor/xterm.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/addon-fit.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/addon-web-links.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/socket.io.min.js') }}"></script>
+<script>
+(function() {
+  'use strict';
+
+  const HOST_ID = {{ host.id }};
+  const HOST_LABEL = '{{ host.username }}@{{ host.address }}:{{ host.port }}';
+
+  /* ── Tab management ── */
+  const tabs = [];      /* { id, term, fitAddon, socket, connected, el, pane } */
+  let activeTabId = -1;
+  let nextTabId = 0;
+  const tabBar = document.getElementById('term-tab-bar');
+  const termContainer = document.getElementById('xterm-container');
+
+  /* ── Status UI ── */
+  const statusDot = document.getElementById('term-status-dot');
+  const statusText = document.getElementById('term-status-text');
+  const banner = document.getElementById('term-disconnect-banner');
+
+  function setStatus(connected) {
+    if (statusDot) statusDot.className = 'term-dot ' + (connected ? 'online' : 'offline');
+    if (statusText) statusText.textContent = connected ? 'Connected' : 'Disconnected';
+    if (banner) banner.style.display = connected ? 'none' : 'flex';
+  }
+
+  function getActiveTab() {
+    return tabs.find(function(t) { return t.id === activeTabId; });
+  }
+
+  /* Create xterm.js terminal options */
+  function makeTermOpts() {
+    return {
+      cursorBlink: true,
+      fontSize: 14,
+      fontFamily: "'JetBrains Mono', 'SF Mono', Monaco, Menlo, 'Courier New', monospace",
+      theme: {
+        background: '#080a08',
+        foreground: '#c0ffc0',
+        cursor: '#00ff41',
+        cursorAccent: '#080a08',
+        selectionBackground: '#1a4a1a',
+        black: '#0a0e0a', red: '#ff003c', green: '#00ff41', yellow: '#ffb700',
+        blue: '#0ff', magenta: '#ff6090', cyan: '#0ff', white: '#c0ffc0',
+      },
+      scrollback: 10000,
+      allowProposedApi: true,
+    };
+  }
+
+  /* Create a new terminal tab */
+  function createTab() {
+    const id = nextTabId++;
+    const num = tabs.length + 1;
+
+    /* ── Pane ── */
+    const pane = document.createElement('div');
+    pane.className = 'xterm-tab-pane';
+    pane.style.display = 'none';
+    pane.style.background = '#080a08';
+    termContainer.appendChild(pane);
+
+    /* ── xterm ── */
+    const term = new window.Terminal(makeTermOpts());
+    const fitAddon = new window.FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    try {
+      const webLinksAddon = new window.WebLinksAddon.WebLinksAddon();
+      term.loadAddon(webLinksAddon);
+    } catch(e) {}
+    term.open(pane);
+
+    /* ── SocketIO connection ── */
+    const sock = io({ transports: ['polling', 'websocket'] });
+    const tab = { id: id, term: term, fitAddon: fitAddon, socket: sock, connected: false, pane: pane, el: null };
+
+    /* Wire events */
+    sock.on('connect', function() {
+      term.write('\r\nConnecting to ' + HOST_LABEL + ' (Session ' + num + ')...\r\n');
+      sock.emit('ssh_connect', { host_id: HOST_ID, cols: term.cols, rows: term.rows });
+    });
+
+    sock.on('shell_output', function(data) {
+      if (data.data) term.write(data.data);
+    });
+
+    sock.on('shell_status', function(data) {
+      tab.connected = data.connected;
+      if (tab.id === activeTabId) setStatus(data.connected);
+    });
+
+    term.onData(function(data) {
+      if (tab.connected) sock.emit('ssh_input', { data: data });
+    });
+
+    term.onResize(function(size) {
+      if (tab.connected) sock.emit('ssh_resize', { cols: size.cols, rows: size.rows });
+    });
+
+    /* Keyboard shortcuts inside terminal */
+    term.attachCustomKeyEventHandler(function(e) {
+      if (e.type !== 'keydown') return true;
+      const ctrl = e.ctrlKey, shift = e.shiftKey;
+      if (ctrl && shift) {
+        switch (e.key) {
+          case 'C': /* Ctrl+Shift+C → copy selected text */
+            e.preventDefault();
+            const sel = term.getSelection();
+            if (sel) navigator.clipboard.writeText(sel);
+            return false;
+          case 'V': /* Ctrl+Shift+V → paste */
+            e.preventDefault();
+            navigator.clipboard.readText().then(function(text) {
+              if (tab.connected) sock.emit('ssh_input', { data: text });
+            }).catch(function() {});
+            return false;
+          case 'T': /* Ctrl+Shift+T → new tab */
+            e.preventDefault();
+            createTab();
+            return false;
+          case 'W': /* Ctrl+Shift+W → close current tab */
+            e.preventDefault();
+            closeTab(tab.id);
+            return false;
+          case 'R': /* Ctrl+Shift+R → reconnect */
+            e.preventDefault();
+            reconnectTab(tab);
+            return false;
+        }
+        /* Ctrl+Shift+1-9 → switch to tab N */
+        const n = parseInt(e.key, 10);
+        if (n >= 1 && n <= 9 && n <= tabs.length) {
+          e.preventDefault();
+          switchTab(tabs[n - 1].id);
+          return false;
+        }
+      }
+      return true;
+    });
+
+    /* ── Tab button ── */
+    const tabBtn = document.createElement('button');
+    tabBtn.className = 'term-tab';
+    tabBtn.setAttribute('data-tab', id);
+    tabBtn.innerHTML = 'Session ' + num + ' <span class="tab-close" title="Close tab">&times;</span>';
+    tabBtn.addEventListener('click', function(e) {
+      if (e.target.classList.contains('tab-close')) {
+        closeTab(id);
+      } else {
+        switchTab(id);
+      }
+    });
+    tab.el = tabBtn;
+
+    /* Insert before the "+" button */
+    tabBar.insertBefore(tabBtn, document.getElementById('btn-new-tab'));
+
+    tabs.push(tab);
+    switchTab(id);
+    return tab;
+  }
+
+  function switchTab(id) {
+    tabs.forEach(function(t) {
+      const isActive = t.id === id;
+      t.pane.style.display = isActive ? 'block' : 'none';
+      t.el.classList.toggle('active', isActive);
+      if (isActive) {
+        t.fitAddon.fit();
+        t.term.focus();
+        setStatus(t.connected);
+      }
+    });
+    activeTabId = id;
+  }
+
+  function closeTab(id) {
+    if (tabs.length <= 1) return; /* keep at least one tab */
+    const idx = tabs.findIndex(function(t) { return t.id === id; });
+    if (idx < 0) return;
+    const tab = tabs[idx];
+    tab.socket.emit('ssh_disconnect_host', { host_id: HOST_ID });
+    tab.socket.disconnect();
+    tab.term.dispose();
+    tab.pane.remove();
+    tab.el.remove();
+    tabs.splice(idx, 1);
+    if (activeTabId === id) {
+      switchTab(tabs[Math.min(idx, tabs.length - 1)].id);
+    }
+  }
+
+  function reconnectTab(tab) {
+    if (!tab) tab = getActiveTab();
+    if (!tab) return;
+    tab.term.write('\r\n--- Reconnecting ---\r\n');
+    tab.socket.emit('ssh_connect', { host_id: HOST_ID, cols: tab.term.cols, rows: tab.term.rows });
+  }
+
+  /* Remove default first tab button */
+  const defaultTabBtn = tabBar.querySelector('[data-tab="0"]');
+  if (defaultTabBtn) defaultTabBtn.remove();
+
+  /* Create first tab */
+  createTab();
+
+  /* Resize all tabs on window resize */
+  window.addEventListener('resize', function() {
+    const tab = getActiveTab();
+    if (tab) tab.fitAddon.fit();
+  });
+
+  /* ── New tab button ── */
+  document.getElementById('btn-new-tab').addEventListener('click', function() {
+    createTab();
+  });
+
+  /* ── Fullscreen ── */
+  document.getElementById('btn-fullscreen').addEventListener('click', function() {
+    const wrap = document.getElementById('term-wrap');
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else if (wrap.classList.contains('fullscreen')) {
+      /* Exit CSS fallback fullscreen */
+      wrap.classList.remove('fullscreen');
+      setTimeout(function() {
+        const tab = getActiveTab();
+        if (tab) tab.fitAddon.fit();
+      }, 200);
+    } else {
+      wrap.requestFullscreen().then(function() {
+        setTimeout(function() {
+          const tab = getActiveTab();
+          if (tab) tab.fitAddon.fit();
+        }, 200);
+      }).catch(function() {
+        /* Fallback: use CSS class */
+        wrap.classList.add('fullscreen');
+        setTimeout(function() {
+          const tab = getActiveTab();
+          if (tab) tab.fitAddon.fit();
+        }, 200);
+      });
+    }
+  });
+  document.addEventListener('fullscreenchange', function() {
+    setTimeout(function() {
+      const tab = getActiveTab();
+      if (tab) tab.fitAddon.fit();
+    }, 200);
+  });
+
+  /* ── Top bar buttons ── */
+  document.getElementById('btn-disconnect').addEventListener('click', function() {
+    const tab = getActiveTab();
+    if (!tab) return;
+    if (confirm('Disconnect this SSH session?')) {
+      tab.socket.emit('ssh_disconnect_host', { host_id: HOST_ID });
+      tab.connected = false;
+      setStatus(false);
+    }
+  });
+
+  document.getElementById('btn-reconnect').addEventListener('click', function() {
+    reconnectTab();
+  });
+
+  document.getElementById('btn-copy').addEventListener('click', function() {
+    const tab = getActiveTab();
+    if (!tab) return;
+    const text = (function() {
+      const lines = [];
+      for (let i = 0; i < tab.term.buffer.active.length; i++) {
+        const line = tab.term.buffer.active.getLine(i);
+        if (line) lines.push(line.translateToString(true));
+      }
+      return lines.join('\n');
+    })();
+    navigator.clipboard.writeText(text).then(function() {
+      const btn = document.getElementById('btn-copy');
+      const orig = btn.textContent;
+      btn.textContent = '✓ Copied!';
+      setTimeout(function() { btn.textContent = orig; }, 1500);
+    });
+  });
+
+  /* Clear history button */
+  const clearBtn = document.getElementById('btn-clear-history');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', function() {
+      if (!confirm('Clear all command history for this host?')) return;
+      fetch('{{ url_for("main.clear_ssh_history", host_id=host.id) }}', {
+        method: 'POST',
+        headers: { 'X-CSRFToken': '{{ csrf_token() }}' },
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.success) {
+          const section = clearBtn.closest('section');
+          if (section) section.remove();
+          const scrollBtn = document.querySelector('.scroll-to-history');
+          if (scrollBtn) scrollBtn.remove();
+        }
+      })
+      .catch(function(e) { alert('Error clearing history: ' + e); });
+    });
+  }
+})();
+</script>
 {% endblock %}

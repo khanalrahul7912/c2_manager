@@ -5,6 +5,8 @@ from dataclasses import dataclass
 
 import paramiko
 
+from app.utils import strip_ansi_codes
+
 
 @dataclass
 class SSHResult:
@@ -42,6 +44,8 @@ def _connect_client(
 
     if endpoint.auth_mode == "password":
         connect_kwargs["password"] = endpoint.password or ""
+        connect_kwargs["allow_agent"] = False
+        connect_kwargs["look_for_keys"] = False
     else:
         if endpoint.key_path:
             connect_kwargs["key_filename"] = endpoint.key_path
@@ -86,10 +90,10 @@ def run_ssh_command(
         else:
             _connect_client(client, target, timeout)
 
-        stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
+        stdin, stdout, stderr = client.exec_command(command, timeout=timeout, get_pty=True)
         del stdin
-        out = stdout.read().decode("utf-8", errors="replace")
-        err = stderr.read().decode("utf-8", errors="replace")
+        out = strip_ansi_codes(stdout.read().decode("utf-8", errors="replace"))
+        err = strip_ansi_codes(stderr.read().decode("utf-8", errors="replace"))
         code = stdout.channel.recv_exit_status()
         return SSHResult(stdout=out, stderr=err, return_code=code)
     except paramiko.ssh_exception.BadHostKeyException as exc:

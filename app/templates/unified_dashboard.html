@@ -2,136 +2,15 @@
 {% block title %}Control Panel{% endblock %}
 {% block content %}
 
-<style>
-/* Tab styling */
-.tabs-container {
-  background: white;
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-  margin-bottom: 1.5rem;
-}
-
-.tabs {
-  display: flex;
-  border-bottom: 2px solid #e0e0e0;
-  background: #f5f5f5;
-  border-radius: 8px 8px 0 0;
-  overflow: hidden;
-}
-
-.tab {
-  flex: 1;
-  padding: 1rem 1.5rem;
-  background: #f5f5f5;
-  border: none;
-  cursor: pointer;
-  font-size: 1rem;
-  font-weight: 500;
-  transition: all 0.3s ease;
-  position: relative;
-  text-align: center;
-}
-
-.tab:hover {
-  background: #e8e8e8;
-}
-
-.tab.active {
-  background: white;
-  color: #2196F3;
-  border-bottom: 3px solid #2196F3;
-}
-
-.tab-content {
-  display: none;
-  padding: 1.5rem;
-}
-
-.tab-content.active {
-  display: block;
-}
-
-/* Statistics cards */
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 1rem;
-  margin-bottom: 1.5rem;
-}
-
-.stat-card {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  padding: 1.5rem;
-  border-radius: 8px;
-  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-}
-
-.stat-card.success {
-  background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
-}
-
-.stat-card.warning {
-  background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-}
-
-.stat-card.info {
-  background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-}
-
-.stat-value {
-  font-size: 2rem;
-  font-weight: bold;
-  margin: 0.5rem 0;
-}
-
-.stat-label {
-  font-size: 0.9rem;
-  opacity: 0.9;
-}
-
-/* Checkbox for selection */
-.select-checkbox {
-  width: 18px;
-  height: 18px;
-  cursor: pointer;
-}
-
-/* Bulk action bar */
-.bulk-action-bar {
-  display: none;
-  background: #e3f2fd;
-  border: 2px solid #2196F3;
-  border-radius: 8px;
-  padding: 1rem 1.5rem;
-  margin-bottom: 1rem;
-  align-items: center;
-  gap: 1rem;
-}
-
-.bulk-action-bar.active {
-  display: flex;
-}
-
-.bulk-action-bar .selected-count {
-  font-weight: bold;
-  color: #1976D2;
-}
-
-.bulk-action-buttons {
-  display: flex;
-  gap: 0.5rem;
-  margin-left: auto;
-}
-</style>
+{# All styles are now in style.css #}
 
 <div class="tabs-container">
   <div class="tabs">
-    <button class="tab {% if view_type == 'ssh' %}active{% endif %}" onclick="switchTab('ssh')">
-      🖥️ SSH Hosts ({{ ssh_total }})
-    </button>
     <button class="tab {% if view_type == 'shells' %}active{% endif %}" onclick="switchTab('shells')">
-      🔌 Reverse Shells ({{ shells_total }})
+      🔌 Reverse Shell ({{ shells_total }})
+    </button>
+    <button class="tab {% if view_type == 'ssh' %}active{% endif %}" onclick="switchTab('ssh')">
+      🖥️ SSH Shell ({{ ssh_total }})
     </button>
   </div>
 
@@ -164,13 +43,18 @@
         <button class="btn" onclick="bulkCheckLiveness('ssh')">✓ Check Liveness</button>
         <button class="btn" onclick="bulkChangeGroup('ssh')">📁 Change Group</button>
         <button class="btn" onclick="bulkRename('ssh')">✏️ Rename</button>
-        <button class="btn ghost" onclick="bulkDelete('ssh')" style="background: #f44336; color: white;">🗑️ Delete</button>
+        <button class="btn" onclick="runOrchestration('ssh', 'system-info')">📊 System Info</button>
+        <button class="btn" onclick="runOrchestration('ssh', 'network-info')">🌐 Network</button>
+        <button class="btn" onclick="runOrchestration('ssh', 'process-list')">⚙️ Processes</button>
+        <button class="btn" onclick="runOrchestration('ssh', 'user-info')">👤 Users</button>
+        <button class="btn" onclick="runOrchestration('ssh', 'service-status')">🔧 Services</button>
+        <button class="btn danger" onclick="bulkDelete('ssh')">🗑️ Delete</button>
         <button class="btn ghost" onclick="clearSelection('ssh')">✖ Clear</button>
       </div>
     </div>
 
     <div class="card-header">
-      <h2>SSH Hosts</h2>
+      <h2>SSH Shell</h2>
       <div class="toolbar">
         {% if current_user.role == 'admin' %}
         <a class="btn" href="{{ url_for('main.create_host') }}">➕ Add Host</a>
@@ -193,6 +77,7 @@
       </label>
     </form>
 
+    <div class="table-wrap">
     <table>
       <thead>
         <tr>
@@ -208,19 +93,21 @@
       </thead>
       <tbody>
         {% for host in ssh_hosts %}
-        <tr>
+        <tr class="clickable-row" onclick="toggleRowCheckbox(event, 'ssh', {{ host.id }})">
           <td><input type="checkbox" class="select-checkbox ssh-item-checkbox" data-id="{{ host.id }}" onchange="updateBulkBar('ssh')"></td>
-          <td><strong>{{ host.name }}</strong></td>
+          <td><a href="{{ url_for('main.host_detail', host_id=host.id) }}" class="host-link" onclick="event.stopPropagation()"><strong>{{ host.name }}</strong></a></td>
           <td>{{ host.group_name }}</td>
           <td><code>{{ host.username }}@{{ host.address }}:{{ host.port }}</code></td>
           <td>{{ host.auth_mode }}</td>
           <td>{{ 'yes' if host.use_jump_host else 'no' }}</td>
           <td><span class="pill {{ 'success' if host.is_active else 'failed' }}">{{ 'active' if host.is_active else 'disabled' }}</span></td>
           <td>
-            <a href="{{ url_for('main.host_detail', host_id=host.id) }}" class="btn ghost" style="padding: 0.3rem 0.6rem;">Open</a>
-            {% if current_user.role == 'admin' %}
-            <a href="{{ url_for('main.edit_host', host_id=host.id) }}" class="btn ghost" style="padding: 0.3rem 0.6rem;">Edit</a>
-            {% endif %}
+            <div class="action-dropdown" onclick="event.stopPropagation()">
+              <a href="{{ url_for('main.host_detail', host_id=host.id) }}" class="btn ghost" style="padding: 0.3rem 0.6rem;">Open</a>
+              {% if current_user.role == 'admin' %}
+              <a href="{{ url_for('main.edit_host', host_id=host.id) }}" class="btn ghost" style="padding: 0.3rem 0.6rem;">Edit</a>
+              {% endif %}
+            </div>
           </td>
         </tr>
         {% else %}
@@ -228,6 +115,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
 
     <!-- Pagination for SSH -->
     <div class="pagination-row">
@@ -270,28 +158,33 @@
         <button class="btn" onclick="bulkCheckLiveness('shells')">✓ Check Liveness</button>
         <button class="btn" onclick="bulkChangeGroup('shells')">📁 Change Group</button>
         <button class="btn" onclick="bulkRename('shells')">✏️ Rename</button>
-        <button class="btn ghost" onclick="bulkDelete('shells')" style="background: #f44336; color: white;">🗑️ Delete</button>
+        <button class="btn" onclick="runOrchestration('shells', 'system-info')">📊 System Info</button>
+        <button class="btn" onclick="runOrchestration('shells', 'network-info')">🌐 Network</button>
+        <button class="btn" onclick="runOrchestration('shells', 'process-list')">⚙️ Processes</button>
+        <button class="btn" onclick="runOrchestration('shells', 'user-info')">👤 Users</button>
+        <button class="btn" onclick="runOrchestration('shells', 'service-status')">🔧 Services</button>
+        <button class="btn danger" onclick="bulkDelete('shells')">🗑️ Delete</button>
         <button class="btn ghost" onclick="clearSelection('shells')">✖ Clear</button>
       </div>
     </div>
 
     <div class="card-header">
-      <h2>Reverse Shells</h2>
+      <h2>Reverse Shell</h2>
       <div class="toolbar">
         <button id="refresh-btn" class="btn ghost" onclick="location.reload()">🔄 Refresh</button>
         <button id="auto-refresh-toggle" class="btn ghost" data-enabled="false" onclick="toggleAutoRefresh()">⏰ Auto-Refresh: OFF</button>
-        <a class="btn ghost" href="{{ url_for('main.bulk_shell_operations') }}">⚡ Bulk Command</a>
+        <a class="btn ghost" href="{{ url_for('main.bulk_operations') }}">⚡ Bulk Command</a>
         <button class="btn ghost" onclick="selectAll('shells')">☑️ Select All</button>
       </div>
     </div>
 
     <!-- Filters -->
-    <div style="background: #f5f5f5; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
-      <form method="GET" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.5rem; align-items: end;">
+    <div class="filter-bar">
+      <form method="GET">
         <input type="hidden" name="view" value="shells">
         <div>
-          <label style="display: block; margin-bottom: 0.25rem; font-size: 0.9em; font-weight: 500;">Group</label>
-          <select name="shell_group" class="form-control" style="width: 100%; padding: 0.4rem;">
+          <label>Group</label>
+          <select name="shell_group">
             <option value="">All Groups</option>
             {% for group in shells_groups %}
             <option value="{{ group }}" {% if selected_shell_group == group %}selected{% endif %}>{{ group }}</option>
@@ -300,8 +193,8 @@
         </div>
         
         <div>
-          <label style="display: block; margin-bottom: 0.25rem; font-size: 0.9em; font-weight: 500;">Platform</label>
-          <select name="platform" class="form-control" style="width: 100%; padding: 0.4rem;">
+          <label>Platform</label>
+          <select name="platform">
             <option value="">All Platforms</option>
             {% for platform in shells_platforms %}
             <option value="{{ platform }}" {% if selected_platform == platform %}selected{% endif %}>{{ platform }}</option>
@@ -310,8 +203,8 @@
         </div>
         
         <div>
-          <label style="display: block; margin-bottom: 0.25rem; font-size: 0.9em; font-weight: 500;">Status</label>
-          <select name="status" class="form-control" style="width: 100%; padding: 0.4rem;">
+          <label>Status</label>
+          <select name="status">
             <option value="">All Status</option>
             <option value="active" {% if selected_status == 'active' %}selected{% endif %}>Online</option>
             <option value="disconnected" {% if selected_status == 'disconnected' %}selected{% endif %}>Offline</option>
@@ -319,18 +212,18 @@
         </div>
         
         <div>
-          <label style="display: block; margin-bottom: 0.25rem; font-size: 0.9em; font-weight: 500;">Search</label>
-          <input type="text" name="search" class="form-control" style="width: 100%; padding: 0.4rem;"
-                 placeholder="IP, hostname..." value="{{ selected_search }}">
+          <label>Search</label>
+          <input type="text" name="search" placeholder="IP, hostname..." value="{{ selected_search }}">
         </div>
         
-        <div style="display: flex; gap: 0.5rem;">
-          <button type="submit" class="btn" style="padding: 0.4rem 1rem; flex: 1;">🔍 Filter</button>
-          <a href="{{ url_for('main.unified_dashboard', view='shells') }}" class="btn ghost" style="padding: 0.4rem 1rem; flex: 1;">✖ Clear</a>
+        <div style="display: flex; gap: 0.3rem;">
+          <button type="submit" class="btn">🔍 Filter</button>
+          <a href="{{ url_for('main.unified_dashboard', view='shells') }}" class="btn ghost">✖ Clear</a>
         </div>
       </form>
     </div>
 
+    <div class="table-wrap">
     <table>
       <thead>
         <tr>
@@ -347,7 +240,7 @@
       </thead>
       <tbody>
         {% for shell in shells %}
-        <tr>
+        <tr class="clickable-row" onclick="toggleRowCheckbox(event, 'shells', {{ shell.id }})">
           <td><input type="checkbox" class="select-checkbox shells-item-checkbox" data-id="{{ shell.id }}" onchange="updateBulkBar('shells')"></td>
           <td>
             {% if shell.id in active_shell_ids %}
@@ -356,11 +249,11 @@
             <span class="pill failed">○ Disconnected</span>
             {% endif %}
           </td>
-          <td><strong>{{ shell.name }}</strong></td>
+          <td><a href="{{ url_for('main.shell_detail', shell_id=shell.id) }}" class="host-link" onclick="event.stopPropagation()"><strong>{{ shell.name }}</strong></a></td>
           <td><code>{{ shell.address }}:{{ shell.port }}</code></td>
           <td>{{ shell.group_name }}</td>
           <td>{{ shell.platform or 'Unknown' }}</td>
-          <td>{{ shell.hostname or '-' }}</td>
+          <td><a href="{{ url_for('main.shell_detail', shell_id=shell.id) }}" class="host-link" onclick="event.stopPropagation()">{{ shell.hostname or '-' }}</a></td>
           <td>
             {% if shell.last_seen %}
             {{ shell.last_seen.strftime('%Y-%m-%d %H:%M:%S') }}
@@ -369,12 +262,14 @@
             {% endif %}
           </td>
           <td>
-            <a href="{{ url_for('main.shell_detail', shell_id=shell.id) }}" class="btn ghost" style="padding: 0.3rem 0.6rem;">
-              {% if shell.id in active_shell_ids %}Interact{% else %}View{% endif %}
-            </a>
-            {% if current_user.role == 'admin' %}
-            <a href="{{ url_for('main.edit_shell', shell_id=shell.id) }}" class="btn ghost" style="padding: 0.3rem 0.6rem;">Edit</a>
-            {% endif %}
+            <div class="action-dropdown" onclick="event.stopPropagation()">
+              <a href="{{ url_for('main.shell_detail', shell_id=shell.id) }}" class="btn ghost" style="padding: 0.3rem 0.6rem;">
+                {% if shell.id in active_shell_ids %}Interact{% else %}View{% endif %}
+              </a>
+              {% if current_user.role == 'admin' %}
+              <a href="{{ url_for('main.edit_shell', shell_id=shell.id) }}" class="btn ghost" style="padding: 0.3rem 0.6rem;">Edit</a>
+              {% endif %}
+            </div>
           </td>
         </tr>
         {% else %}
@@ -382,6 +277,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
 
     <!-- Pagination for Shells -->
     <div class="pagination-row">
@@ -397,6 +293,19 @@
 </div>
 
 <script>
+const CSRF_TOKEN = '{{ csrf_token() }}';
+
+// Click row to toggle checkbox (skip if clicking a link/button/checkbox)
+function toggleRowCheckbox(event, type, id) {
+  const tag = event.target.tagName.toLowerCase();
+  if (tag === 'a' || tag === 'button' || tag === 'input') return;
+  const cb = event.currentTarget.querySelector(`.${type}-item-checkbox[data-id="${id}"]`);
+  if (cb) {
+    cb.checked = !cb.checked;
+    updateBulkBar(type);
+  }
+}
+
 // Tab switching
 function switchTab(tabName) {
   // Update URL to maintain state
@@ -408,7 +317,7 @@ function switchTab(tabName) {
   document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
   document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
   
-  document.querySelector(`button.tab:nth-child(${tabName === 'ssh' ? 1 : 2})`).classList.add('active');
+  document.querySelector(`button.tab:nth-child(${tabName === 'shells' ? 1 : 2})`).classList.add('active');
   document.getElementById(`${tabName}-tab`).classList.add('active');
 }
 
@@ -476,10 +385,14 @@ function bulkCheckLiveness(type) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'X-CSRFToken': CSRF_TOKEN,
     },
     body: JSON.stringify({ ids: ids })
   })
-  .then(response => response.json())
+  .then(response => {
+    if (!response.ok) throw new Error('Server error: ' + response.status);
+    return response.json();
+  })
   .then(data => {
     alert(`Liveness check complete!\nOnline: ${data.online}\nOffline: ${data.offline}`);
     location.reload();
@@ -506,10 +419,14 @@ function bulkChangeGroup(type) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'X-CSRFToken': CSRF_TOKEN,
     },
     body: JSON.stringify({ ids: ids, group: newGroup })
   })
-  .then(response => response.json())
+  .then(response => {
+    if (!response.ok) throw new Error('Server error: ' + response.status);
+    return response.json();
+  })
   .then(data => {
     alert(`Successfully changed group for ${data.updated} items`);
     location.reload();
@@ -541,10 +458,14 @@ function bulkRename(type) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'X-CSRFToken': CSRF_TOKEN,
     },
     body: JSON.stringify({ ids: ids, pattern: pattern })
   })
-  .then(response => response.json())
+  .then(response => {
+    if (!response.ok) throw new Error('Server error: ' + response.status);
+    return response.json();
+  })
   .then(data => {
     alert(`Successfully renamed ${data.updated} items`);
     location.reload();
@@ -572,10 +493,14 @@ function bulkDelete(type) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'X-CSRFToken': CSRF_TOKEN,
     },
     body: JSON.stringify({ ids: ids })
   })
-  .then(response => response.json())
+  .then(response => {
+    if (!response.ok) throw new Error('Server error: ' + response.status);
+    return response.json();
+  })
   .then(data => {
     alert(`Successfully deleted ${data.deleted} items`);
     location.reload();
@@ -602,5 +527,145 @@ function toggleAutoRefresh() {
     btn.innerHTML = '⏰ Auto-Refresh: ON';
   }
 }
+
+// Orchestration functions
+function runOrchestration(type, action) {
+  const ids = getSelectedIds(type);
+  if (ids.length === 0) {
+    alert('Please select items first');
+    return;
+  }
+
+  const apiType = type === 'ssh' ? 'ssh' : 'shell';
+  let extraParams = {};
+
+  if (action === 'service-status') {
+    const service = prompt('Enter service name (leave empty for all running services):');
+    if (service !== null) {
+      extraParams.service = service;
+    }
+  } else if (action === 'file-read') {
+    const path = prompt('Enter file path to read:');
+    if (!path) return;
+    extraParams.path = path;
+  } else if (action === 'file-list') {
+    const path = prompt('Enter directory path to list:', '/tmp');
+    if (!path) return;
+    extraParams.path = path;
+  }
+
+  const body = { type: apiType, ids: ids, ...extraParams };
+
+  // Show loading
+  const resultsDiv = document.getElementById('orchestration-results');
+  const resultsContent = document.getElementById('orchestration-content');
+  resultsDiv.style.display = 'block';
+  resultsContent.innerHTML = '<p>⏳ Running orchestration...</p>';
+
+  fetch(`/api/orchestrate/${action}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-CSRFToken': CSRF_TOKEN,
+    },
+    body: JSON.stringify(body)
+  })
+  .then(response => {
+    if (!response.ok) throw new Error('Server error: ' + response.status);
+    return response.json();
+  })
+  .then(data => {
+    if (!data.success) {
+      resultsContent.innerHTML = `<p style="color: var(--danger-color);">Error: ${data.error}</p>`;
+      return;
+    }
+
+    let html = '<h3 style="color:var(--primary-color);">' + action.replace('-', ' ').toUpperCase() + ' Results</h3>';
+    data.results.forEach(result => {
+      const name = result.host_name || result.shell_name || 'Unknown';
+      const status = result.success ? '✅' : '❌';
+      const output = result.stdout || result.output || result.stderr || 'No output';
+      const cls = result.success ? 'success' : 'error';
+      html += '<div class="orch-result ' + cls + '">';
+      html += '<strong>' + status + ' ' + name + '</strong>';
+      html += '<pre style="margin-top:0.5rem;max-height:300px;overflow:auto;white-space:pre-wrap;">' + output + '</pre>';
+      html += '</div>';
+    });
+    resultsContent.innerHTML = html;
+  })
+  .catch(error => {
+    resultsContent.innerHTML = `<p style="color: var(--danger-color);">Error: ${error}</p>`;
+  });
+}
+</script>
+
+<!-- Orchestration Results Panel -->
+<div id="orchestration-results" class="orch-modal">
+  <div class="orch-modal-header">
+    <h3>Orchestration Results</h3>
+    <button class="btn ghost" onclick="document.getElementById('orchestration-results').style.display='none'">✖ Close</button>
+  </div>
+  <div id="orchestration-content" class="orch-modal-body"></div>
+</div>
+<div id="orchestration-backdrop" class="orch-backdrop" onclick="document.getElementById('orchestration-results').style.display='none'; this.style.display='none';"></div>
+
+<script>
+// Show/hide backdrop with results panel
+const resultsPanel = document.getElementById('orchestration-results');
+const backdrop = document.getElementById('orchestration-backdrop');
+const observer = new MutationObserver(() => {
+  backdrop.style.display = resultsPanel.style.display;
+});
+observer.observe(resultsPanel, { attributes: true, attributeFilter: ['style'] });
+</script>
+
+{# ── Auto-refresh & New Shell Notification ── #}
+<script src="{{ url_for('static', filename='vendor/socket.io.min.js') }}"></script>
+<script>
+(function() {
+  'use strict';
+
+  // Connect to Socket.IO for real-time new-shell notifications
+  try {
+    const sock = io({ transports: ['polling', 'websocket'] });
+
+    sock.on('new_shell_connected', function(data) {
+      // Show browser notification
+      if (Notification.permission === 'granted') {
+        new Notification('New Shell Connected', {
+          body: (data.hostname || data.address) + ' (' + (data.platform || 'Unknown') + ')',
+          icon: '{{ url_for("static", filename="img/favicon.svg") }}',
+        });
+      } else if (Notification.permission !== 'denied') {
+        Notification.requestPermission();
+      }
+
+      // Show in-page toast notification (click to navigate)
+      const toast = document.createElement('div');
+      toast.style.cssText = 'position:fixed;top:1rem;right:1rem;background:var(--bg-surface);color:var(--primary-color);padding:1rem 1.5rem;border-radius:6px;z-index:2000;box-shadow:0 4px 12px rgba(0,0,0,0.5);border:1px solid var(--primary-color);font-weight:600;cursor:pointer;font-family:inherit;';
+      toast.textContent = '🔔 New shell: ' + (data.hostname || data.address) + ' (' + (data.platform || 'Unknown') + ')';
+      toast.addEventListener('click', function() {
+        window.location.href = '/shells/' + data.id;
+      });
+      document.body.appendChild(toast);
+
+      // Add "Refresh" link to the toast
+      const refreshLink = document.createElement('div');
+      refreshLink.style.cssText = 'font-size:0.85rem;margin-top:0.3rem;text-decoration:underline;';
+      refreshLink.textContent = 'Click here to refresh the list';
+      refreshLink.addEventListener('click', function(e) {
+        e.stopPropagation();
+        window.location.reload();
+      });
+      toast.appendChild(refreshLink);
+      setTimeout(function() { toast.remove(); }, 10000);
+    });
+  } catch(e) {}
+
+  // Request notification permission on page load
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
+})();
 </script>
 {% endblock %}

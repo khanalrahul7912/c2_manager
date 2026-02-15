@@ -500,16 +500,19 @@ def bulk_operations():
 def host_detail(host_id: int):
     host = db.get_or_404(Host, host_id)
 
-    page = _page_arg("page")
-    executions_pagination = CommandExecution.query.filter_by(host_id=host.id).order_by(
+    # Load only the most recent 20 executions for inline terminal display
+    initial_limit = 20
+    total_count = CommandExecution.query.filter_by(host_id=host.id).count()
+    executions = CommandExecution.query.filter_by(host_id=host.id).order_by(
         CommandExecution.started_at.desc()
-    ).paginate(page=page, per_page=PAGE_SIZE_DEFAULT, error_out=False)
+    ).limit(initial_limit).all()
 
     return render_template(
         "host_detail.html",
         host=host,
-        executions=executions_pagination.items,
-        executions_pagination=executions_pagination,
+        executions=executions,
+        total_history=total_count,
+        loaded_history=len(executions),
     )
 
 
@@ -629,18 +632,20 @@ def shell_detail(shell_id: int):
     listener = get_listener(current_app._get_current_object())
     is_connected = shell_id in listener.get_active_shells()
 
-    # Get command history
-    page = _page_arg("page")
-    executions_pagination = ShellExecution.query.filter_by(shell_id=shell.id).order_by(
+    # Load only the most recent 20 executions for inline terminal display
+    initial_limit = 20
+    total_count = ShellExecution.query.filter_by(shell_id=shell.id).count()
+    executions = ShellExecution.query.filter_by(shell_id=shell.id).order_by(
         ShellExecution.started_at.desc()
-    ).paginate(page=page, per_page=PAGE_SIZE_DEFAULT, error_out=False)
+    ).limit(initial_limit).all()
 
     return render_template(
         "shell_detail.html",
         shell=shell,
         is_connected=is_connected,
-        executions=executions_pagination.items,
-        executions_pagination=executions_pagination,
+        executions=executions,
+        total_history=total_count,
+        loaded_history=len(executions),
     )
 
 
@@ -1070,6 +1075,56 @@ def shell_status_api(shell_id: int):
         "address": shell.address,
         "hostname": shell.hostname,
         "last_seen": shell.last_seen.isoformat() if shell.last_seen else None,
+    })
+
+
+@main_bp.route("/api/history/ssh/<int:host_id>")
+@login_required
+def ssh_history_api(host_id: int):
+    """Lazy-load older SSH command history for the interactive terminal."""
+    host = db.session.get(Host, host_id)
+    if not host:
+        return jsonify({"error": "Host not found"}), 404
+
+    offset = request.args.get("offset", 0, type=int)
+    limit = min(request.args.get("limit", 20, type=int), 50)
+
+    items = CommandExecution.query.filter_by(host_id=host.id).order_by(
+        CommandExecution.started_at.desc()
+    ).offset(offset).limit(limit).all()
+
+    return jsonify({
+        "items": [
+            {"command": e.command, "stdout": e.stdout or "", "stderr": e.stderr or ""}
+            for e in items
+        ],
+        "offset": offset,
+        "limit": limit,
+    })
+
+
+@main_bp.route("/api/history/reverse/<int:shell_id>")
+@login_required
+def reverse_history_api(shell_id: int):
+    """Lazy-load older reverse shell command history for the interactive terminal."""
+    shell = db.session.get(ReverseShell, shell_id)
+    if not shell:
+        return jsonify({"error": "Shell not found"}), 404
+
+    offset = request.args.get("offset", 0, type=int)
+    limit = min(request.args.get("limit", 20, type=int), 50)
+
+    items = ShellExecution.query.filter_by(shell_id=shell.id).order_by(
+        ShellExecution.started_at.desc()
+    ).offset(offset).limit(limit).all()
+
+    return jsonify({
+        "items": [
+            {"command": e.command, "stdout": e.output or e.stdout or "", "stderr": e.stderr or ""}
+            for e in items
+        ],
+        "offset": offset,
+        "limit": limit,
     })
 
 

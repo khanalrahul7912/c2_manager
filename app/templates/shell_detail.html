@@ -45,7 +45,7 @@
   </div>
 
   <div class="term-body" id="term-body">
-    {# Render previous command history inline #}
+    {# Render recent command history (newest first, reversed to oldest-first display) #}
     {% for run in executions | reverse %}
     <div><span class="term-prompt-label">{{ shell.shell_user or 'shell' }}@{{ shell.hostname or shell.address }}$</span> <span class="term-cmd">{{ run.command }}</span></div>
     {% if run.output %}<div><span class="term-stdout">{{ run.output }}</span></div>{% endif %}
@@ -59,29 +59,17 @@
   </form>
 </div>
 
-{% if executions_pagination.pages and executions_pagination.pages > 1 %}
-<section class="card" style="margin-top:1rem;">
-  <h3>Older Command History</h3>
-  <div class="pagination-row">
-    {% if executions_pagination.has_prev %}
-    <a class="btn ghost" href="{{ url_for('main.shell_detail', shell_id=shell.id, page=executions_pagination.prev_num) }}">Prev</a>
-    {% endif %}
-    <span>Page {{ executions_pagination.page }} / {{ executions_pagination.pages }}</span>
-    {% if executions_pagination.has_next %}
-    <a class="btn ghost" href="{{ url_for('main.shell_detail', shell_id=shell.id, page=executions_pagination.next_num) }}">Next</a>
-    {% endif %}
-  </div>
-</section>
-{% endif %}
-
 <script>
   window.TERMINAL_CONFIG = {
-    executeUrl:  '{{ url_for("main.shell_execute_api", shell_id=shell.id) }}',
-    statusUrl:   '{{ url_for("main.shell_status_api", shell_id=shell.id) }}',
-    shellType:   'reverse',
-    promptLabel: '{{ shell.shell_user or "shell" }}@{{ shell.hostname or shell.address }}$',
-    isConnected: {{ 'true' if is_connected else 'false' }},
-    csrfToken:   '{{ csrf_token() }}',
+    executeUrl:   '{{ url_for("main.shell_execute_api", shell_id=shell.id) }}',
+    statusUrl:    '{{ url_for("main.shell_status_api", shell_id=shell.id) }}',
+    historyUrl:   '{{ url_for("main.reverse_history_api", shell_id=shell.id) }}',
+    shellType:    'reverse',
+    promptLabel:  '{{ shell.shell_user or "shell" }}@{{ shell.hostname or shell.address }}$',
+    isConnected:  {{ 'true' if is_connected else 'false' }},
+    csrfToken:    '{{ csrf_token() }}',
+    totalHistory: {{ total_history }},
+    loadedHistory: {{ loaded_history }},
   };
 </script>
 <script src="{{ url_for('static', filename='js/terminal.js') }}"></script>

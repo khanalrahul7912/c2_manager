@@ -705,8 +705,8 @@ code {
   line-height: 1.55;
   color: #c0caf5;
   padding: 0.75rem 1rem;
-  min-height: 350px;
-  max-height: 600px;
+  min-height: 60vh;
+  max-height: 75vh;
   overflow-y: auto;
   white-space: pre-wrap;
   word-break: break-all;
@@ -721,6 +721,28 @@ code {
 
 .term-body > div {
   margin-bottom: 2px;
+}
+
+.term-load-more {
+  text-align: center;
+  padding: 0.5rem;
+}
+
+.term-load-more button {
+  background: #2a2b3d;
+  border: 1px solid #3d3f58;
+  color: #787c99;
+  padding: 0.3rem 1rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-family: 'SF Mono', Monaco, Menlo, 'Courier New', monospace;
+  transition: all 0.2s;
+}
+
+.term-load-more button:hover {
+  background: #3d3f58;
+  color: #c0caf5;
 }
 
 .term-prompt-label {

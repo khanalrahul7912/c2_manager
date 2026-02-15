@@ -154,34 +154,6 @@ def dashboard():
     return redirect(url_for("main.unified_dashboard", view="shells"))
 
 
-@main_bp.route("/hosts")
-@login_required
-def hosts_dashboard():
-    """SSH Hosts dashboard (legacy)."""
-    group = request.args.get("group", "").strip()
-    host_page = _page_arg("host_page")
-    run_page = _page_arg("run_page")
-
-    host_query = Host.query.order_by(Host.name.asc())
-    if group:
-        host_query = host_query.filter(Host.group_name == group)
-
-    hosts_pagination = host_query.paginate(page=host_page, per_page=PAGE_SIZE_DEFAULT, error_out=False)
-    runs_pagination = CommandExecution.query.order_by(CommandExecution.started_at.desc()).paginate(
-        page=run_page, per_page=PAGE_SIZE_DEFAULT, error_out=False
-    )
-
-    groups = [value[0] for value in db.session.query(Host.group_name).distinct().all() if value[0]]
-    return render_template(
-        "dashboard.html",
-        hosts=hosts_pagination.items,
-        hosts_pagination=hosts_pagination,
-        recent_commands=runs_pagination.items,
-        runs_pagination=runs_pagination,
-        groups=sorted(groups),
-        selected_group=group,
-    )
-
 
 
 def _validate_host_form(form: HostForm) -> bool:
@@ -582,106 +554,6 @@ def host_detail(host_id: int):
 # ============================================================================
 
 
-@main_bp.route("/shells")
-@login_required
-def shells_dashboard():
-    """Dashboard for reverse shell connections."""
-    # Get filter parameters
-    group_filter = request.args.get("group", "").strip()
-    platform_filter = request.args.get("platform", "").strip()
-    status_filter = request.args.get("status", "").strip()
-    search_query = request.args.get("search", "").strip()
-    page = _page_arg("page")
-    
-    # Base query
-    shell_query = ReverseShell.query
-    
-    # Apply filters
-    if group_filter:
-        shell_query = shell_query.filter(ReverseShell.group_name == group_filter)
-    
-    if platform_filter:
-        shell_query = shell_query.filter(ReverseShell.platform == platform_filter)
-    
-    if search_query:
-        search_pattern = f'%{search_query}%'
-        shell_query = shell_query.filter(
-            db.or_(
-                ReverseShell.address.like(search_pattern),
-                ReverseShell.hostname.like(search_pattern),
-                ReverseShell.shell_user.like(search_pattern),
-                ReverseShell.name.like(search_pattern)
-            )
-        )
-    
-    # Get active shells for status filtering
-    listener = get_listener(current_app._get_current_object())
-    active_shell_ids = set(listener.get_active_shells())
-    
-    # Order by last seen
-    shell_query = shell_query.order_by(ReverseShell.last_seen.desc().nullslast(), ReverseShell.name.asc())
-    
-    # Fetch all shells matching the criteria
-    all_shells = shell_query.all()
-    
-    # Apply status filter based on active connections
-    if status_filter == "active":
-        shells = [s for s in all_shells if s.id in active_shell_ids]
-    elif status_filter == "disconnected":
-        shells = [s for s in all_shells if s.id not in active_shell_ids]
-    else:
-        shells = all_shells
-    
-    # Manual pagination
-    total_shells = len(shells)
-    shells_per_page = PAGE_SIZE_DEFAULT
-    total_pages = max(1, (total_shells + shells_per_page - 1) // shells_per_page)
-    page = min(page, total_pages)
-    start_idx = (page - 1) * shells_per_page
-    end_idx = start_idx + shells_per_page
-    paginated_shells = shells[start_idx:end_idx]
-    
-    # Get unique values for filter dropdowns
-    all_groups = sorted([g[0] for g in db.session.query(ReverseShell.group_name).distinct().all() if g[0]])
-    all_platforms = sorted([p[0] for p in db.session.query(ReverseShell.platform).distinct().all() if p[0]])
-    
-    # Get connection IP based on config
-    display_mode = current_app.config.get('REVERSE_SHELL_DISPLAY_IP', 'public')
-    
-    if display_mode == 'public':
-        display_ip = current_app.config.get('REVERSE_SHELL_PUBLIC_IP')
-    elif display_mode == 'local':
-        display_ip = current_app.config.get('REVERSE_SHELL_LOCAL_IP')
-    else:
-        display_ip = display_mode  # Use as-is if specific IP provided
-    
-    # Also provide both IPs for flexibility
-    public_ip = current_app.config.get('REVERSE_SHELL_PUBLIC_IP')
-    local_ip = current_app.config.get('REVERSE_SHELL_LOCAL_IP')
-    shell_port = current_app.config.get('REVERSE_SHELL_PORT', 5000)
-    
-    return render_template(
-        "shells_dashboard.html",
-        shells=paginated_shells,
-        page=page,
-        total_pages=total_pages,
-        has_prev=page > 1,
-        has_next=page < total_pages,
-        all_groups=all_groups,
-        all_platforms=all_platforms,
-        current_filters={
-            'group': group_filter,
-            'platform': platform_filter,
-            'status': status_filter,
-            'search': search_query
-        },
-        active_shell_ids=active_shell_ids,
-        connection_ip=display_ip,
-        public_ip=public_ip,
-        local_ip=local_ip,
-        shell_port=shell_port,
-    )
-
 
 @main_bp.route("/shells/<int:shell_id>")
 @login_required
@@ -725,97 +597,6 @@ def edit_shell(shell_id: int):
     return render_template("shell_form.html", form=form, title=f"Edit Shell: {shell.name}")
 
 
-@main_bp.route("/operations/bulk-shells", methods=["GET", "POST"])
-@login_required
-def bulk_shell_operations():
-    """Bulk command execution on reverse shells."""
-    form = BulkShellCommandForm()
-    
-    # Get all shells
-    shells = ReverseShell.query.filter_by(is_active=True).order_by(
-        ReverseShell.group_name.asc(), ReverseShell.name.asc()
-    ).all()
-    
-    # Get active shells
-    listener = get_listener(current_app._get_current_object())
-    active_shell_ids = set(listener.get_active_shells())
-    
-    # Only show connected shells in the form
-    form.shell_ids.choices = [
-        (shell.id, f"[{shell.group_name}] {shell.name} ({shell.address}) {'✓ online' if shell.id in active_shell_ids else '✗ offline'}")
-        for shell in shells
-    ]
-    
-    if form.validate_on_submit():
-        selected_shells = [shell for shell in shells if shell.id in form.shell_ids.data]
-        if not selected_shells:
-            flash("Select at least one shell.", "warning")
-            return redirect(url_for("main.bulk_shell_operations"))
-        
-        command = form.command.data.strip()
-        success_count = 0
-        failure_count = 0
-        
-        for shell in selected_shells:
-            if shell.id not in active_shell_ids:
-                # Create failed execution for offline shells
-                execution = ShellExecution(
-                    shell_id=shell.id,
-                    user_id=current_user.id,
-                    command=command,
-                    status="failed",
-                    output="Shell is not connected",
-                    started_at=datetime.utcnow(),
-                    completed_at=datetime.utcnow(),
-                )
-                db.session.add(execution)
-                failure_count += 1
-                continue
-            
-            # Create execution record
-            execution = ShellExecution(
-                shell_id=shell.id,
-                user_id=current_user.id,
-                command=command,
-                status="running",
-            )
-            db.session.add(execution)
-            db.session.commit()
-            
-            # Execute command
-            try:
-                success, output = listener.execute_command(shell.id, command, timeout=60)
-                execution.output = output
-                execution.status = "success" if success else "failed"
-                execution.completed_at = datetime.utcnow()
-                db.session.commit()
-                
-                if success:
-                    success_count += 1
-                else:
-                    failure_count += 1
-            except Exception as exc:
-                execution.status = "failed"
-                execution.output = f"Error: {exc}"
-                execution.completed_at = datetime.utcnow()
-                db.session.commit()
-                failure_count += 1
-        
-        flash(f"Bulk execution finished: {success_count} success, {failure_count} failed.", "info")
-        return redirect(url_for("main.bulk_shell_operations"))
-    
-    # Get recent operations
-    run_page = _page_arg("page")
-    runs_pagination = ShellExecution.query.order_by(ShellExecution.started_at.desc()).paginate(
-        page=run_page, per_page=PAGE_SIZE_DEFAULT, error_out=False
-    )
-    
-    return render_template(
-        "bulk_shell_operations.html",
-        form=form,
-        recent_bulk=runs_pagination.items,
-        runs_pagination=runs_pagination,
-    )
 
 
 @main_bp.route("/export/ssh-executions")
@@ -912,11 +693,8 @@ def export_shell_executions():
 @main_bp.route("/sessions", methods=["GET"])
 @login_required
 def sessions():
-    """
-    Alias to shells_dashboard for API compatibility.
-    Display table of all reverse shell sessions.
-    """
-    return shells_dashboard()
+    """Redirect legacy sessions URL to the unified dashboard."""
+    return redirect(url_for("main.unified_dashboard"))
 
 
 @main_bp.route("/api/sessions", methods=["GET"])

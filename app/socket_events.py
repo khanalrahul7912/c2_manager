@@ -30,8 +30,13 @@ _ws_sessions: Dict[str, dict] = {}
 _ws_lock = threading.Lock()
 
 
-def _send_stty(conn_socket, rows: int, cols: int) -> None:
-    """Send stty terminal resize command to a reverse shell socket."""
+def _send_stty(conn_socket, rows: int, cols: int, platform: str = "Linux") -> None:
+    """Send terminal resize command to a reverse shell socket.
+
+    On Windows/PowerShell shells, stty is not available, so this is a no-op.
+    """
+    if platform == "Windows":
+        return  # stty not available on Windows
     try:
         conn_socket.sendall(f"stty rows {rows} cols {cols} 2>/dev/null\n".encode("utf-8"))
     except OSError:
@@ -73,7 +78,7 @@ def register_events(sio: SocketIO) -> None:
         # Apply terminal size from the client if provided
         cols = data.get("cols", DEFAULT_TERM_COLS)
         rows = data.get("rows", DEFAULT_TERM_ROWS)
-        _send_stty(conn.conn, rows, cols)
+        _send_stty(conn.conn, rows, cols, platform=conn.platform)
 
         emit("shell_status", {"connected": True})
         emit("shell_output", {"data": "\r\n"})
@@ -190,7 +195,7 @@ def register_events(sio: SocketIO) -> None:
         conn_obj = listener.connections.get(shell_id)
         if not conn_obj or not conn_obj.is_active:
             return
-        _send_stty(conn_obj.conn, rows, cols)
+        _send_stty(conn_obj.conn, rows, cols, platform=conn_obj.platform)
 
     @sio.on("reverse_disconnect_host")
     def on_reverse_disconnect_host(data: dict) -> None:
@@ -305,6 +310,32 @@ def register_events(sio: SocketIO) -> None:
             channel = client.invoke_shell(term="xterm-256color", width=cols, height=rows)
             channel.settimeout(0.5)
 
+        except paramiko.ssh_exception.AuthenticationException as exc:
+            msg = f"\r\n⚠ SSH authentication failed: {exc}\r\n"
+            msg += "\r\nTips:\r\n"
+            msg += "  • Check username and password are correct\r\n"
+            msg += "  • For key-based auth, ensure the key file path is valid\r\n"
+            msg += "  • Some servers disable password auth — try key auth\r\n"
+            emit("shell_output", {"data": msg})
+            emit("shell_status", {"connected": False})
+            return
+        except paramiko.ssh_exception.BadHostKeyException as exc:
+            msg = f"\r\n⚠ Host key verification failed: {exc}\r\n"
+            msg += "  • Disable 'Strict Host Key' for this host if you trust it\r\n"
+            emit("shell_output", {"data": msg})
+            emit("shell_status", {"connected": False})
+            return
+        except paramiko.ssh_exception.SSHException as exc:
+            msg = f"\r\n⚠ SSH error: {exc}\r\n"
+            if "not found in known_hosts" in str(exc):
+                msg += "  • Disable 'Strict Host Key' in host settings\r\n"
+            emit("shell_output", {"data": msg})
+            emit("shell_status", {"connected": False})
+            return
+        except (socket.error, TimeoutError) as exc:
+            emit("shell_output", {"data": f"\r\n⚠ Connection failed: {exc}\r\n"})
+            emit("shell_status", {"connected": False})
+            return
         except Exception as exc:
             emit("shell_output", {"data": f"\r\n⚠ SSH connection failed: {exc}\r\n"})
             emit("shell_status", {"connected": False})

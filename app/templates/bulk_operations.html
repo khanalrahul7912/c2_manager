@@ -60,7 +60,8 @@
       <div class="card-header">
         <h3>Recent Shell Operations</h3>
         <div class="toolbar">
-          <a href="{{ url_for('main.export_shell_executions') }}" class="btn ghost">Export CSV</a>
+          <a href="{{ url_for('main.export_shell_executions') }}" class="btn ghost" title="Download CSV">📥 CSV</a>
+          <a href="{{ url_for('main.export_commands', format='json') }}?type=shell" class="btn ghost" title="Download JSON">📥 JSON</a>
         </div>
       </div>
       <table class="bulk-results-table">
@@ -123,7 +124,8 @@
       <div class="card-header">
         <h3>Recent SSH Operations</h3>
         <div class="toolbar">
-          <a href="{{ url_for('main.export_ssh_executions') }}" class="btn ghost">Export CSV</a>
+          <a href="{{ url_for('main.export_ssh_executions') }}" class="btn ghost" title="Download CSV">📥 CSV</a>
+          <a href="{{ url_for('main.export_commands', format='json') }}?type=ssh" class="btn ghost" title="Download JSON">📥 JSON</a>
         </div>
       </div>
       <table class="bulk-results-table">

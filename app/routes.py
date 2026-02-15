@@ -1293,6 +1293,15 @@ def export_commands(format: str):
         return ExportHelper.to_csv_response(commands_data, 'shell_commands.csv', fieldnames)
 
 
+@main_bp.route("/payload-generator")
+@login_required
+def payload_generator():
+    """Show reverse shell payload generator with server IP/port pre-filled."""
+    listener = get_listener(current_app)
+    port = listener.port if listener else current_app.config.get("SHELL_LISTENER_PORT", 5000)
+    return render_template("payload_generator.html", port=port)
+
+
 @main_bp.route("/control-panel")
 @login_required
 def unified_dashboard():

